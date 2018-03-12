@@ -7,9 +7,9 @@ goog.require('ol.proj');
 goog.require('os.interpolate');
 goog.require('os.metrics.MapMetrics');
 goog.require('os.metrics.Metrics');
-goog.require('os.ui.action.ActionEvent');
 goog.require('os.ui.im.ImportEvent');
 goog.require('os.ui.im.ImportProcess');
+goog.require('os.ui.menu.MenuEvent');
 goog.require('os.ui.query.cmd.AreaAdd');
 goog.require('os.ui.query.ui.area.userAreaDirective');
 
@@ -25,7 +25,7 @@ os.query.addArea = function(area, opt_active) {
   // Make sure the area is enabled if it is in the app
   os.ui.areaManager.toggle(area, active);
   os.command.CommandProcessor.getInstance().addCommand(new os.ui.query.cmd.AreaAdd(area, active));
-  os.dispatcher.dispatchEvent(new os.ui.action.ActionEvent(os.ui.action.EventType.ZOOM, {
+  os.dispatcher.dispatchEvent(new os.ui.menu.MenuEvent(os.ui.action.EventType.ZOOM, {
     'feature': area,
     'geometry': area.getGeometry()
   }));
@@ -49,7 +49,7 @@ os.query.launchQueryImport = function(opt_config) {
  */
 os.query.launchCoordinates = function() {
   os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.LOAD_FROM_COORDINATES, 1);
-  os.ui.query.ui.area.getUserArea().then(os.query.addArea);
+  os.ui.query.ui.area.getUserArea().then(os.query.addArea, goog.nullFunction);
 };
 
 
@@ -89,7 +89,7 @@ os.query.isWorldQuery = function(geometry) {
     // transform the world extent to the current projection to compute the area
     var worldExtent = ol.proj.transformExtent(os.query.WORLD_EXTENT, os.proj.EPSG4326, os.map.PROJECTION);
     var worldArea = ol.extent.getArea(worldExtent);
-    if (geometry.getArea() >= worldArea || geometry.getArea() == 0) {
+    if (goog.math.nearlyEquals(geometry.getArea(), worldArea) || geometry.getArea() == 0) {
       geometry.setCoordinates(world.getCoordinates());
       return true;
     }
@@ -97,7 +97,6 @@ os.query.isWorldQuery = function(geometry) {
 
   return false;
 };
-
 
 /**
  * The world extent in EPSG:4326. This is the max precision that a polygon can handle.

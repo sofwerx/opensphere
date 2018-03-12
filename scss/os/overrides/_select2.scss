@@ -1,3 +1,4 @@
+
 .select2-default {
   color: $overrides-text-color !important;
   // select2 is an ass and used !important so we have to use it too
@@ -8,7 +9,7 @@
   border: $overrides-border-width solid $overrides-border-color;
   color: $overrides-text-color;
   padding-top: 2px;
-  z-index: 100002;
+  z-index: $overrides-modal-zindex * 99 !important;
 
   .select2-search .select2-input {
     background: #777;
@@ -16,7 +17,7 @@
   }
 }
 
-.select2-search > input[type="text"] {
+.select2-search > input[type='text'] {
   color: $color-black;
 }
 
@@ -56,13 +57,14 @@
       border-left: 0;
 
       b {
+        // sass-lint:disable no-vendor-prefixes
+        -moz-osx-font-smoothing: grayscale;
+        -webkit-font-smoothing: antialiased;
         background: transparent;
         color: $color-black;
         display: inline-block;
         font: normal normal normal 14px/1 FontAwesome;
         font-size: inherit;
-        -moz-osx-font-smoothing: grayscale;
-        -webkit-font-smoothing: antialiased;
         height: 100%;
         padding-top: 2px;
         text-align: center;

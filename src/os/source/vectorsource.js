@@ -17,6 +17,7 @@ goog.require('os');
 goog.require('os.Fields');
 goog.require('os.alert.AlertEventSeverity');
 goog.require('os.alert.AlertManager');
+goog.require('os.data.ColumnDefinition');
 goog.require('os.data.DataManager');
 goog.require('os.data.RecordField');
 goog.require('os.data.event.DataEvent');
@@ -27,8 +28,11 @@ goog.require('os.defines');
 goog.require('os.events.PropertyChangeEvent');
 goog.require('os.events.SelectionType');
 goog.require('os.feature');
+goog.require('os.feature.DynamicPropertyChange');
 goog.require('os.geo');
 goog.require('os.geo.jsts');
+goog.require('os.hist.HistogramData');
+goog.require('os.hist.IHistogramProvider');
 goog.require('os.implements');
 goog.require('os.interpolate');
 goog.require('os.layer.AnimationOverlay');
@@ -51,6 +55,7 @@ goog.require('os.ui.slick.column');
 /**
  * @extends {ol.source.Vector}
  * @implements {os.source.ISource}
+ * @implements {os.hist.IHistogramProvider}
  * @param {olx.source.VectorOptions=} opt_options OpenLayers vector source options.
  * @constructor
  */
@@ -234,9 +239,9 @@ os.source.Vector = function(opt_options) {
   this.processQueue_ = [];
 
   /**
-   * Timer to handle bulk processing of new features as they're added to the source. This vastly improves time model
+   * Delay to handle bulk processing of new features as they're added to the source. This vastly improves time model
    * insertion performance.
-   * @type {?goog.async.Delay}
+   * @type {goog.async.Delay}
    * @protected
    */
   this.processTimer = new goog.async.Delay(this.onProcessTimer_, 250, this);
@@ -249,8 +254,8 @@ os.source.Vector = function(opt_options) {
   this.unprocessQueue_ = [];
 
   /**
-   * Timer to handle bulk unprocessing of features as they're removed from the source.
-   * @type {?goog.async.Delay}
+   * Delay to handle bulk unprocessing of features as they're removed from the source.
+   * @type {goog.async.Delay}
    * @protected
    */
   this.unprocessTimer = new goog.async.Delay(this.onUnprocessTimer_, 250, this);
@@ -266,6 +271,20 @@ os.source.Vector = function(opt_options) {
    * @protected
    */
   this.animationOverlay = null;
+
+  /**
+   * Map of dynamic features that update on every animation frame.
+   * @type {!Object<string, (os.feature.DynamicFeature|undefined)>}
+   * @private
+   */
+  this.dynamicFeatures_ = {};
+
+  /**
+   * Map of dynamic feature listeners.
+   * @type {!Object<string, (ol.EventsKey|undefined)>}
+   * @private
+   */
+  this.dynamicListeners_ = {};
 
   /**
    * @type {!Object<string, Array<ol.Feature>>}
@@ -338,9 +357,16 @@ os.source.Vector = function(opt_options) {
   this.refreshEnabled = false;
 
   /**
+   * Features queued to be cleared.
    * @type {?Array<ol.Feature>}
    */
   this.toClear = null;
+
+  /**
+   * Unique ID column.
+   * @type {?os.data.ColumnDefinition}
+   */
+  this.uniqueId_ = null;
 
   if (!options['disableAreaSelection']) {
     os.dispatcher.listen(os.action.EventType.SELECT, this.onFeatureAction_, false, this);
@@ -356,6 +382,7 @@ os.source.Vector = function(opt_options) {
   os.source.Vector.base(this, 'constructor', /** @type {!olx.source.VectorOptions} */ (options));
 };
 goog.inherits(os.source.Vector, ol.source.Vector);
+os.implements(os.source.Vector, os.hist.IHistogramProvider.ID);
 os.implements(os.source.Vector, os.source.ISource.ID);
 
 
@@ -415,10 +442,11 @@ os.source.Vector.prototype.disposeInternal = function() {
 
   this.disposeAnimationOverlay();
 
-  this.processTimer.dispose();
+  goog.dispose(this.processTimer);
   this.processTimer = null;
   this.processQueue_.length = 0;
-  this.unprocessTimer.dispose();
+
+  goog.dispose(this.unprocessTimer);
   this.unprocessTimer = null;
   this.unprocessQueue_.length = 0;
 
@@ -870,20 +898,44 @@ os.source.Vector.prototype.getGeometryShape = function() {
 /**
  * Sets the geometry shape used by features in the source.
  * @param {string} value
+ * @suppress {accessControls}
  */
 os.source.Vector.prototype.setGeometryShape = function(value) {
+  var oldGeomShape = this.geometryShape_;
   this.geometryShape_ = value;
   this.testShapeFields_(value);
 
-  if (os.style.ELLIPSE_REGEXP.test(value)) {
+  // we are converting to an ellipse shape
+  var ellipseTest = os.style.ELLIPSE_REGEXP.test(value);
+  // we are converting to a lob shape
+  var lobTest = os.style.LOB_REGEXP.test(value);
+  // we are converting back from an ellipse or lob shape and need to reindex the original
+  var revertIndexTest = os.style.ELLIPSE_REGEXP.test(oldGeomShape) || os.style.LOB_REGEXP.test(oldGeomShape);
+
+  if (ellipseTest || lobTest || revertIndexTest) {
     var features = this.getFeatures();
     for (var i = 0, n = features.length; i < n; i++) {
-      os.feature.createEllipse(features[i]);
-    }
-  } else if (os.style.LOB_REGEXP.test(value)) {
-    var features = this.getFeatures();
-    for (var i = 0, n = features.length; i < n; i++) {
-      os.feature.createLineOfBearing(features[i]);
+      var geoms = [features[i].getGeometry()];
+
+      if (ellipseTest) {
+        os.feature.createEllipse(features[i]);
+        geoms.push(/** @type {ol.geom.Geometry} */ (features[i].get(os.data.RecordField.ELLIPSE)));
+      }
+
+      if (lobTest) {
+        os.feature.createLineOfBearing(features[i]);
+
+        // This picks up cached ellipses even if the user has them off. While that's not ideal, we
+        // don't have a choice until we can refactor both ellipse and LOB into "derived geometries"
+        // and give them a better setup form in the app
+        geoms.push(/** @type {ol.geom.Geometry} */ (features[i].get(os.data.RecordField.ELLIPSE)));
+        geoms.push(/** @type {ol.geom.Geometry} */ (features[i].get(os.data.RecordField.LINE_OF_BEARING)));
+      }
+
+      var extent = geoms.reduce(os.fn.reduceExtentFromGeometries, ol.extent.createEmpty());
+      if (!ol.extent.isEmpty(extent)) {
+        this.featuresRtree_.update(extent, features[i]);
+      }
     }
   }
 };
@@ -1097,6 +1149,7 @@ os.source.Vector.prototype.getMaxDate = function() {
  * Gets the layer title
  * @param {boolean=} opt_doNoUseTypeInName turns off the inclusion of the explicit type in the name
  * @return {!string} The title
+ * @override
  */
 os.source.Vector.prototype.getTitle = function(opt_doNoUseTypeInName) {
   var layer = /** @type {os.layer.ILayer} */ (os.MapContainer.getInstance().getLayer(this.getId()));
@@ -1162,8 +1215,11 @@ os.source.Vector.prototype.setCesiumEnabled = function(value) {
       // prevent the animation overlay from being rendered on the 2D map
       this.animationOverlay.setMap(null);
 
-      // show features from the overlay.
-      this.dispatchAnimationFrame(undefined, this.animationOverlay.getFeatures());
+      // once the stack clears (and Cesium has been enabled/initialized), fire an animation event to update feature
+      // visibility
+      goog.async.nextTick(function() {
+        this.dispatchAnimationFrame(undefined, this.animationOverlay.getFeatures());
+      }, this);
     } else {
       // clear displayed features. the overlay will be used to render them.
       this.dispatchAnimationFrame(this.animationOverlay.getFeatures());
@@ -1322,6 +1378,53 @@ os.source.Vector.prototype.updateAnimationState_ = function() {
 
     this.disposeAnimationOverlay();
   }
+};
+
+
+/**
+ * @inheritDoc
+ */
+os.source.Vector.prototype.getHistogram = function(options) {
+  var start = options.start;
+  var end = options.end;
+  var interval = options.interval;
+
+  if (interval > 0) {
+    var model = this.getTimeModel();
+    if (model && this.getVisible() && this.getTimeEnabled()) {
+      var counts = {};
+      var lastRange = model.getLastRange();
+
+      var min = Math.floor(start / interval) * interval;
+      while (min <= end) {
+        var next = min + interval;
+        var matches = model.intersection(new os.time.TimeRange(min, next), false, true).length;
+        counts[min] = matches;
+        min = next;
+      }
+
+      // reset time filters on the model to the last used range, or groupData calls will use the last range of this
+      // histogram
+      if (lastRange) {
+        model.intersection(lastRange, false, true);
+      }
+
+      if (goog.object.getCount(counts) > 0) {
+        var sourceHisto = new os.hist.HistogramData();
+        sourceHisto.setId(this.getId());
+        sourceHisto.setColor(os.color.toHexString(this.getColor()));
+        sourceHisto.setCounts(counts);
+        sourceHisto.setOptions(options);
+        sourceHisto.setTitle(this.getTitle());
+        sourceHisto.setVisible(this.getVisible());
+        sourceHisto.setRange(model.getRange());
+
+        return sourceHisto;
+      }
+    }
+  }
+
+  return null;
 };
 
 
@@ -1647,7 +1750,7 @@ os.source.Vector.prototype.processFeatures = function(features) {
   var totalCount = os.data.DataManager.getInstance().getTotalFeatureCount();
   var maxFeatures = os.ogc.getMaxFeatures();
 
-  if (totalCount + features.length > maxFeatures) {
+  if (totalCount + features.length >= maxFeatures) {
     // max feature count hit, only add features up to the limit
     features.length = Math.max(maxFeatures - totalCount, 0);
     os.source.handleMaxFeatureCount(maxFeatures);
@@ -1736,6 +1839,16 @@ os.source.Vector.prototype.processImmediate = function(feature) {
   // hit detection.
   if (feature.values_[os.style.StyleField.SHOW_LABELS] == null) {
     feature.values_[os.style.StyleField.SHOW_LABELS] = false;
+  }
+
+  // dynamic features are treated differently by animation, so track them in a map
+  if (feature instanceof os.feature.DynamicFeature) {
+    this.dynamicFeatures_[featureId] = feature;
+
+    if (this.animationOverlay) {
+      feature.initDynamic();
+      this.addDynamicListener(feature);
+    }
   }
 
   os.style.setFeatureStyle(feature, this);
@@ -1834,7 +1947,15 @@ os.source.Vector.prototype.unprocessFeature = function(feature) {
  * @suppress {accessControls} To allow direct access to feature id.
  */
 os.source.Vector.prototype.unprocessImmediate = function(feature) {
-  this.shownRecordMap[/** @type {string} */ (feature.id_)] = undefined;
+  var featureId = /** @type {string} */ (feature.id_);
+  this.shownRecordMap[featureId] = undefined;
+
+  if (feature instanceof os.feature.DynamicFeature) {
+    this.removeDynamicListener(feature);
+
+    feature.disposeDynamic(true);
+    this.dynamicFeatures_[featureId] = undefined;
+  }
 };
 
 
@@ -1868,6 +1989,8 @@ os.source.Vector.prototype.unprocessDeferred = function(features) {
   this.shownRecordMap = os.object.prune(this.shownRecordMap);
   this.idIndex_ = os.object.prune(this.idIndex_);
   this.undefIdIndex_ = os.object.prune(this.undefIdIndex_);
+  this.dynamicFeatures_ = os.object.prune(this.dynamicFeatures_);
+  this.dynamicListeners_ = os.object.prune(this.dynamicListeners_);
 
   // removed features should never remain in the selection
   this.removeFromSelected(features);
@@ -1969,6 +2092,9 @@ os.source.Vector.prototype.createAnimationOverlay = function() {
     });
 
     this.dispatchEvent(new os.events.PropertyChangeEvent(os.source.PropertyChange.ANIMATION_ENABLED, true));
+
+    // initialize animation state for dynamic features
+    this.initDynamicAnimation();
   }
 };
 
@@ -2015,7 +2141,9 @@ os.source.Vector.prototype.updateAnimationOverlay = function() {
       var lookAheadRange25 = os.time.UNBOUNDED;
       var lookAheadRange50 = os.time.UNBOUNDED;
       var lookAheadRange75 = os.time.UNBOUNDED;
-      var windowSize = (this.displayRange_.getEnd() - this.displayRange_.getStart()) * .25;
+      var displayStart = this.displayRange_.getStart();
+      var displayEnd = this.displayRange_.getEnd();
+      var windowSize = (displayEnd - displayStart) * .25;
       var lookAhead = false;
 
       // look for features to fade in/out based on the previous window
@@ -2031,6 +2159,7 @@ os.source.Vector.prototype.updateAnimationOverlay = function() {
           lookAheadRange75 = new os.time.TimeRange(lookAheadRange50.getStart() - windowSize,
               lookAheadRange50.getStart());
 
+          displayStart = lookAheadRange75.getStart();
           lookAhead = true;
         } else if (this.previousRange_.getStart() > this.displayRange_.getStart()) {
           // moving backward, get features ahead of current window to fade out
@@ -2043,6 +2172,7 @@ os.source.Vector.prototype.updateAnimationOverlay = function() {
           lookAheadRange75 = new os.time.TimeRange(lookAheadRange50.getEnd(),
               lookAheadRange50.getEnd() + windowSize);
 
+          displayEnd = lookAheadRange75.getEnd();
           lookAhead = true;
         }
       }
@@ -2073,13 +2203,44 @@ os.source.Vector.prototype.updateAnimationOverlay = function() {
         displayedFeatures = displayedFeatures.concat(lookAheadFeatures25, lookAheadFeatures50, lookAheadFeatures75);
       }
 
+      // dynamic features should always be displayed, so add them if they wouldn't have been returned by the time model
+      // intersection
+      var hasDynamic = false;
+      for (var dynamicId in this.dynamicFeatures_) {
+        var dynamicFeature = this.dynamicFeatures_[dynamicId];
+        if (dynamicFeature) {
+          hasDynamic = true;
+
+          var featureTime = /** @type {os.time.ITime|undefined} */ (dynamicFeature.get(os.data.RecordField.TIME));
+          if (featureTime && (featureTime.getStart() > displayEnd || featureTime.getEnd() < displayStart) &&
+              !this.isHidden(dynamicFeature)) {
+            displayedFeatures.push(dynamicFeature);
+          }
+        }
+      }
+
+      // tell the cesium synchronizer which features changed visibility
       if (this.cesiumEnabled) {
-        // tell the cesium synchronizer which features changed visibility
         this.dispatchAnimationFrame(undefined, this.animationOverlay.getFeatures());
         this.dispatchAnimationFrame(this.animationOverlay.getFeatures(), displayedFeatures);
       }
 
+      // update the 2D animation overlay features
       this.animationOverlay.setFeatures(displayedFeatures);
+
+      // update dynamic features. this must happen after cesium animation frames are dispatched to avoid initial
+      // visibility state issues with cesium.
+      for (var dynamicId in this.dynamicFeatures_) {
+        var dynamicFeature = this.dynamicFeatures_[dynamicId];
+        if (dynamicFeature) {
+          dynamicFeature.updateDynamic(displayEnd);
+        }
+      }
+
+      // notify data consumers if dynamic data has changed
+      if (hasDynamic) {
+        this.dispatchEvent(new os.events.PropertyChangeEvent(os.source.PropertyChange.DATA));
+      }
     } else {
       this.animationOverlay.setFeatures(undefined);
 
@@ -2166,6 +2327,9 @@ os.source.Vector.prototype.dispatchAnimationFrame = function(opt_hide, opt_show)
  */
 os.source.Vector.prototype.disposeAnimationOverlay = function() {
   if (this.animationOverlay) {
+    // dispose animation state for dynamic features
+    this.disposeDynamicAnimation();
+
     // remove fade if necessary from the last shown features
     if (this.tlc && this.tlc.getFade()) {
       this.updateFadeStyle_(this.getFeatures(), 1);
@@ -2180,6 +2344,108 @@ os.source.Vector.prototype.disposeAnimationOverlay = function() {
     this.rangeCollections_ = {};
 
     this.dispatchEvent(new os.events.PropertyChangeEvent(os.source.PropertyChange.ANIMATION_ENABLED, false));
+  }
+};
+
+
+/**
+ * Set up animation state for dynamic features.
+ * @protected
+ */
+os.source.Vector.prototype.initDynamicAnimation = function() {
+  for (var id in this.dynamicFeatures_) {
+    var feature = this.dynamicFeatures_[id];
+    if (feature) {
+      feature.initDynamic();
+      this.addDynamicListener(feature);
+    }
+  }
+};
+
+
+/**
+ * Add a listener for a dynamic feature.
+ * @param {!ol.Feature} feature The feature.
+ * @protected
+ *
+ * @suppress {accessControls} To allow direct access to feature id.
+ */
+os.source.Vector.prototype.addDynamicListener = function(feature) {
+  // update the overlay when the original geometry changes
+  var featureId = /** @type {string} */ (feature.id_);
+  var geometry = feature.getGeometry();
+  if (geometry) {
+    var listenKey = this.dynamicListeners_[featureId];
+    if (listenKey) {
+      ol.events.unlistenByKey(listenKey);
+    }
+
+    // if the original geometry changes, recreate the displayed line
+    this.dynamicListeners_[featureId] = ol.events.listen(feature, goog.events.EventType.PROPERTYCHANGE,
+        this.onDynamicFeatureChange, this);
+  }
+};
+
+
+/**
+ * Remove a listener for a dynamic feature.
+ * @param {!ol.Feature} feature The feature.
+ * @protected
+ *
+ * @suppress {accessControls} To allow direct access to feature id.
+ */
+os.source.Vector.prototype.removeDynamicListener = function(feature) {
+  // update the overlay when the original geometry changes
+  var featureId = /** @type {string} */ (feature.id_);
+  var listenKey = this.dynamicListeners_[featureId];
+  if (listenKey) {
+    ol.events.unlistenByKey(listenKey);
+    this.dynamicListeners_[featureId] = undefined;
+  }
+};
+
+
+/**
+ * Handle dynamic feature property change events.
+ * @param {!(os.events.PropertyChangeEvent|ol.events.Event)} event The change event.
+ * @protected
+ */
+os.source.Vector.prototype.onDynamicFeatureChange = function(event) {
+  if (event instanceof os.events.PropertyChangeEvent) {
+    var p = event.getProperty();
+    if (p === os.feature.DynamicPropertyChange.GEOMETRY) {
+      // if the original geometry changes, dispose the dynamic geometries so they are recreated
+      var feature = /** @type {os.feature.DynamicFeature} */ (event.target);
+      if (feature) {
+        feature.disposeDynamic(true);
+        this.updateAnimationOverlay();
+      }
+    }
+  }
+};
+
+
+/**
+ * Dispose animation state for dynamic features.
+ * @protected
+ */
+os.source.Vector.prototype.disposeDynamicAnimation = function() {
+  var hasDynamic = false;
+  for (var id in this.dynamicFeatures_) {
+    var feature = this.dynamicFeatures_[id];
+    if (feature) {
+      hasDynamic = true;
+
+      this.removeDynamicListener(feature);
+      feature.disposeDynamic();
+    }
+  }
+
+  this.dynamicListeners_ = {};
+
+  if (hasDynamic) {
+    // notify data consumers that the dynamic data has changed
+    this.dispatchEvent(new os.events.PropertyChangeEvent(os.source.PropertyChange.DATA));
   }
 };
 
@@ -2913,6 +3179,26 @@ os.source.Vector.prototype.defaultFeatureHover_ = function(feature) {
 
 
 /**
+ * Gets the unique ID used by features in the source.
+ * @return {os.data.ColumnDefinition}
+ */
+os.source.Vector.prototype.getUniqueId = function() {
+  return this.uniqueId_;
+};
+
+
+/**
+ * Sets the unique ID used by features in the source.
+ * @param {os.data.ColumnDefinition} value
+ */
+os.source.Vector.prototype.setUniqueId = function(value) {
+  var old = this.uniqueId_;
+  this.uniqueId_ = value;
+  this.dispatchEvent(new os.events.PropertyChangeEvent(os.source.PropertyChange.UNIQUE_ID, value, old));
+};
+
+
+/**
  * @inheritDoc
  */
 os.source.Vector.prototype.persist = function(opt_to) {
@@ -2922,6 +3208,10 @@ os.source.Vector.prototype.persist = function(opt_to) {
   options['timeEnabled'] = this.getTimeEnabled();
   options['altitudeEnabled'] = this.hasAltitudeEnabled();
   options['refreshInterval'] = this.refreshInterval;
+
+  if (this.uniqueId_) {
+    options['uniqueId'] = this.uniqueId_.persist();
+  }
 
   if (this.colorModel) {
     options['colorModel'] = this.colorModel.persist();
@@ -2964,5 +3254,11 @@ os.source.Vector.prototype.restore = function(config) {
     colorModel.restore(config['colorModel']);
 
     this.setColorModel(colorModel);
+  }
+
+  if (config['uniqueId']) {
+    var columnDef = new os.data.ColumnDefinition();
+    columnDef.restore(config['uniqueId']);
+    this.setUniqueId(columnDef);
   }
 };

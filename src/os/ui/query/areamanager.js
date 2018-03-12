@@ -14,13 +14,13 @@ goog.require('os.data.RecordField');
 goog.require('os.events.PropertyChangeEvent');
 goog.require('os.geo.jsts');
 goog.require('os.map');
+goog.require('os.map.IMapContainer');
 goog.require('os.mixin.geometry');
 goog.require('os.storage');
 goog.require('os.storage.AsyncStorageWrapper');
 goog.require('os.storage.HTML5LocalStorage');
 goog.require('os.storage.IDBStorage');
 goog.require('os.style.area');
-goog.require('os.ui.ol.IMap');
 goog.require('os.ui.window');
 
 
@@ -223,7 +223,7 @@ os.ui.query.AreaManager.prototype.onMapUnready_ = function() {
 
 /**
  * Gets the map reference relevant to this area manager.
- * @return {os.ui.ol.IMap}
+ * @return {os.map.IMapContainer}
  */
 os.ui.query.AreaManager.prototype.getMap = function() {
   return this.map_;
@@ -232,7 +232,7 @@ os.ui.query.AreaManager.prototype.getMap = function() {
 
 /**
  * Sets the map reference relevant to this area manager.
- * @param {os.ui.ol.IMap} map
+ * @param {os.map.IMapContainer} map
  */
 os.ui.query.AreaManager.prototype.setMap = function(map) {
   if (this.getMap()) {
@@ -382,6 +382,7 @@ os.ui.query.AreaManager.prototype.filterFeatures = function(features) {
  * @param {boolean=} opt_bulk - just show/hide on bulk
  * @return {boolean}
  * @protected
+ * @override
  */
 os.ui.query.AreaManager.prototype.addInternal = function(feature, opt_bulk) {
   var bulk = opt_bulk || false;

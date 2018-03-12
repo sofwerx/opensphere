@@ -86,7 +86,7 @@ os.olcs.Camera.prototype.setEnabled = function(value) {
 
 
 /**
- * @return {number|undefined} Heading in radians.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.getHeading = function() {
   return this.cam_.heading;
@@ -94,7 +94,7 @@ os.olcs.Camera.prototype.getHeading = function() {
 
 
 /**
- * @param {number} heading In radians.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.setHeading = function(heading) {
   var carto = this.cam_.positionCartographic;
@@ -110,7 +110,7 @@ os.olcs.Camera.prototype.setHeading = function(heading) {
 
 
 /**
- * @return {number} Tilt in radians.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.getTilt = function() {
   return this.tilt_;
@@ -118,7 +118,7 @@ os.olcs.Camera.prototype.getTilt = function() {
 
 
 /**
- * @param {number} tilt In radians.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.setTilt = function(tilt) {
   this.tilt_ = tilt;
@@ -127,8 +127,7 @@ os.olcs.Camera.prototype.setTilt = function(tilt) {
 
 
 /**
- * Shortcut for ol.View.getCenter().
- * @return {ol.Coordinate|undefined} Same projection as the ol.View.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.getCenter = function() {
   var view = this.map_.getView();
@@ -142,25 +141,29 @@ os.olcs.Camera.prototype.getCenter = function() {
 
 
 /**
- * Shortcut for ol.View.setCenter().
- * @param {ol.Coordinate} center Same projection as the ol.View.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.setCenter = function(center) {
-  this.flyTo(center);
+  this.flyTo(/** @type {!osx.map.FlyToOptions} */ ({
+    center: center,
+    positionCamera: true
+  }));
 };
 
 
 /**
- * Sets the position of the camera.
- * @param {ol.Coordinate} position Same projection as the ol.View.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.setPosition = function(position) {
-  this.flyTo(position);
+  this.flyTo(/** @type {!osx.map.FlyToOptions} */ ({
+    center: position,
+    positionCamera: true
+  }));
 };
 
 
 /**
- * @return {number} Altitude in meters.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.getAltitude = function() {
   return this.cam_.positionCartographic.height;
@@ -168,10 +171,13 @@ os.olcs.Camera.prototype.getAltitude = function() {
 
 
 /**
- * @param {number} altitude In meters.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.setAltitude = function(altitude) {
-  this.flyTo(undefined, altitude);
+  this.flyTo(/** @type {!osx.map.FlyToOptions} */ ({
+    altitude: altitude,
+    positionCamera: true
+  }));
 };
 
 
@@ -187,37 +193,70 @@ os.olcs.Camera.prototype.getExtent = function() {
 
 
 /**
- * Flies the camera to point at the specified target.
- * @param {ol.Coordinate=} opt_center The destination center point.
- * @param {number=} opt_altitude The destination altitude.
- * @param {number=} opt_duration The fly duration, in milliseconds.
+ * Cancels the current camera flight if one is in progress. The camera is left at it's current location.
  */
-os.olcs.Camera.prototype.flyTo = function(opt_center, opt_altitude, opt_duration) {
-  if (this.enabled_) {
-    var target;
-    if (opt_center) {
-      opt_center = ol.proj.transform(opt_center, os.map.PROJECTION, os.proj.EPSG4326);
+os.olcs.Camera.prototype.cancelFlight = function() {
+  if (this.enabled_ && this.cam_) {
+    this.cam_.cancelFlight();
+  }
+};
 
-      var lon = ol.math.toRadians(opt_center[0]);
-      var lat = ol.math.toRadians(opt_center[1]);
-      target = new Cesium.Cartographic(lon, lat);
+
+/**
+ * Flies the camera to point at the specified target.
+ * @param {!osx.map.FlyToOptions} options The fly to options.
+ */
+os.olcs.Camera.prototype.flyTo = function(options) {
+  if (this.enabled_) {
+    var duration = options.duration != null ? options.duration : os.MapContainer.FLY_ZOOM_DURATION;
+    var easingFunction = options.flightMode === os.FlightMode.SMOOTH ? Cesium.EasingFunction.LINEAR_NONE : undefined;
+
+    var target;
+    if (options.center) {
+      var center = ol.proj.transform(options.center, os.map.PROJECTION, os.proj.EPSG4326);
+      target = new Cesium.Cartographic(ol.math.toRadians(center[0]), ol.math.toRadians(center[1]));
     } else {
       // clone the current position or Cesium won't animate the change
       target = this.cam_.positionCartographic.clone();
     }
 
-    target.height = 0;
-    var height = opt_altitude != null ? opt_altitude : this.getAltitude();
-    var maxHeight = this.scene_.screenSpaceCameraController.maximumZoomDistance;
-    var destination = Cesium.Ellipsoid.WGS84.cartographicToCartesian(target);
-    var duration = opt_duration != null ? opt_duration : 500;
-    var bounds = new Cesium.BoundingSphere(destination);
-    var hpr = new Cesium.HeadingPitchRange(this.cam_.heading, this.cam_.pitch, Math.min(height, maxHeight));
+    // use current altitude if not defined, and cap to the maximum value
+    var altitude = options.altitude != null ? options.altitude : this.getAltitude();
+    var maxAltitude = this.scene_.screenSpaceCameraController.maximumZoomDistance;
+    altitude = Math.min(altitude, maxAltitude);
 
-    this.cam_.flyToBoundingSphere(bounds, {
-      offset: hpr,
-      duration: duration / 1000
-    });
+    var heading = options.heading != null ? ol.math.toRadians(options.heading) : this.cam_.heading;
+    var pitch = options.pitch != null ? ol.math.toRadians(options.pitch) : this.cam_.pitch;
+    var roll = options.roll != null ? ol.math.toRadians(options.roll) : this.cam_.roll;
+
+    if (options.positionCamera) {
+      // move the camera to the specified position
+      target.height = altitude;
+
+      this.cam_.flyTo({
+        destination: Cesium.Ellipsoid.WGS84.cartographicToCartesian(target),
+        duration: duration / 1000,
+        easingFunction: easingFunction,
+        orientation: {
+          heading: heading,
+          pitch: pitch,
+          roll: roll
+        }
+      });
+    } else {
+      // point the camera at the specified position, on the ground
+      target.height = 0;
+
+      var boundingSphere = new Cesium.BoundingSphere(Cesium.Ellipsoid.WGS84.cartographicToCartesian(target));
+      var range = options.range != null ? options.range : altitude;
+      var offset = new Cesium.HeadingPitchRange(heading, pitch, range);
+
+      this.cam_.flyToBoundingSphere(boundingSphere, {
+        offset: offset,
+        duration: duration / 1000,
+        easingFunction: easingFunction
+      });
+    }
   }
 };
 
@@ -300,6 +339,7 @@ os.olcs.Camera.prototype.zoomByDelta = function(delta) {
  * Updates the state of the underlying Cesium.Camera
  * according to the current values of the properties.
  * @private
+ * @override
  */
 os.olcs.Camera.prototype.updateCamera_ = function() {
   var view = this.map_.getView();
@@ -340,7 +380,7 @@ os.olcs.Camera.prototype.updateCamera_ = function() {
 
 
 /**
- * Calculates the values of the properties from the current ol.View state.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.readFromView = function() {
   var view = this.map_.getView();
@@ -365,8 +405,7 @@ os.olcs.Camera.prototype.readFromView = function() {
 
 
 /**
- * Calculates the values of the properties from the current Cesium.Camera state.
- * Modifies the center, resolution and rotation properties of the view.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.updateView = function() {
   var view = this.map_.getView();
@@ -445,8 +484,7 @@ os.olcs.Camera.prototype.updateView = function() {
 
 
 /**
- * Check if the underlying camera state has changed and ensure synchronization.
- * @param {boolean=} opt_dontSync Do not synchronize the view.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.checkCameraChange = function(opt_dontSync) {
   var old = this.lastCameraViewMatrix_;
@@ -462,9 +500,7 @@ os.olcs.Camera.prototype.checkCameraChange = function(opt_dontSync) {
 
 
 /**
- * @param {number} resolution Number of map units per pixel.
- * @param {number} latitude Latitude in radians.
- * @return {number} The calculated distance.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.calcDistanceForResolution = function(resolution, latitude) {
   var canvas = this.scene_.canvas;
@@ -505,9 +541,7 @@ os.olcs.Camera.prototype.calcDistanceForResolution = function(resolution, latitu
 
 
 /**
- * @param {number} distance
- * @param {number} latitude
- * @return {number} The calculated resolution.
+ * @inheritDoc
  */
 os.olcs.Camera.prototype.calcResolutionForDistance = function(distance, latitude) {
   // See the reverse calculation (calcDistanceForResolution) for details

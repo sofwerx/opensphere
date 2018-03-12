@@ -167,9 +167,7 @@ os.ui.timeline.AbstractTimelineCtrl = function($scope, $element, $timeout) {
   this.windowBrush = new os.ui.timeline.Brush();
   this.windowBrush.setClamp(false);
   this.windowBrush.setToolTip('The currently-displayed time window');
-  this.windowBrush.drawFlagCheck = function() {
-    return !os.ui.timeline.AbstractTimelineCtrl.collapsed;
-  };
+  this.windowBrush.drawFlagCheck = os.ui.timeline.AbstractTimelineCtrl.drawFlagCheck;
 
   /**
    * @type {os.ui.timeline.SelectBrush}
@@ -281,6 +279,14 @@ os.ui.timeline.AbstractTimelineCtrl.FPS_VALUES_ = [0.5, 1, 2, 4, 6, 8, 18, 24, 3
  * @type {boolean}
  */
 os.ui.timeline.AbstractTimelineCtrl.collapsed = false;
+
+
+/**
+ * @return {boolean} Whether or not to draw "flags" on brushes
+ */
+os.ui.timeline.AbstractTimelineCtrl.drawFlagCheck = function() {
+  return !os.ui.timeline.AbstractTimelineCtrl.collapsed;
+};
 
 
 /**
@@ -876,34 +882,32 @@ goog.exportProperty(
 os.ui.timeline.AbstractTimelineCtrl.prototype.openMenu = function(selector) {
   var menu = this.menus_[selector];
   if (menu) {
-    if (menu === this.zoomMenu) {
-      // clear the previous data actions
-      var dataGroup = menu.getRoot().find('Data');
-      goog.asserts.assert(!!dataGroup, 'Group "Data" should exist!');
-      dataGroup.children.length = 1;
+    // clear the previous data actions
+    var dataGroup = menu.getRoot().find('Data');
+    goog.asserts.assert(!!dataGroup, 'Group "Data" should exist!');
+    dataGroup.children.length = menu === this.zoomMenu ? 1 : 0;
 
-      // add data actions
-      var histData = /** @type {?Array<!os.hist.HistogramData>} */ (this['histData']);
-      if (histData) {
-        var prefix = menu === this.loadMenu ? 'load:' : 'zoom:';
-        var tip = menu === this.loadMenu ? 'Zooms to and loads ' : 'Zooms to ';
-        var sort = 100;
+    // add data actions
+    var histData = /** @type {?Array<!os.hist.HistogramData>} */ (this['histData']);
+    if (histData) {
+      var prefix = menu === this.loadMenu ? 'load:' : 'zoom:';
+      var tip = menu === this.loadMenu ? 'Zooms to and loads ' : 'Zooms to ';
+      var sort = 100;
 
-        for (var i = 0; i < histData.length; i++) {
-          var hd = histData[i];
-          var range = hd.getRange();
-          var label = hd.getTitle();
+      for (var i = 0; i < histData.length; i++) {
+        var hd = histData[i];
+        var range = hd.getRange();
+        var label = hd.getTitle();
 
-          if (hd.getVisible() && os.ui.timeline.AbstractTimelineCtrl.isSafeRange(range)) {
-            dataGroup.addChild({
-              eventType: prefix + hd.getId(),
-              label: label,
-              tooltip: tip + label,
-              icons: ['<i class="fa fa-fw fa-bars"></i>'],
-              sort: sort++,
-              handler: this.onMenuEvent.bind(this)
-            });
-          }
+        if (hd.getVisible() && os.ui.timeline.AbstractTimelineCtrl.isSafeRange(range)) {
+          dataGroup.addChild({
+            eventType: prefix + hd.getId(),
+            label: label,
+            tooltip: tip + label,
+            icons: ['<i class="fa fa-fw fa-bars"></i>'],
+            sort: sort++,
+            handler: this.onMenuEvent.bind(this)
+          });
         }
       }
     }
@@ -1048,9 +1052,7 @@ os.ui.timeline.AbstractTimelineCtrl.prototype.getSliceBrush = function(range) {
   brush.setClass('slice');
   brush.setToolTip('The slice range');
   brush.canDelete = true;
-  brush.drawFlagCheck = function() {
-    return !os.ui.timeline.AbstractTimelineCtrl.collapsed;
-  };
+  brush.drawFlagCheck = os.ui.timeline.AbstractTimelineCtrl.drawFlagCheck;
   brush.setExtent([range.start, range.end]);
   brush.listen('deleted', this.sliceBrushDeleted_.bind(this));
   brush.listen(goog.events.EventType.PROPERTYCHANGE, this.sliceBrushPropertyChanged_.bind(this));
@@ -1076,9 +1078,7 @@ os.ui.timeline.AbstractTimelineCtrl.prototype.getLoadBrush = function(range) {
   brush.setSilentDrag(true);
   brush.setEventType(os.ui.timeline.Brush.EventType.BRUSH_END);
   brush.canDelete = this.tlc.getLoadRanges().length > 1;
-  brush.drawFlagCheck = function() {
-    return !os.ui.timeline.AbstractTimelineCtrl.collapsed;
-  };
+  brush.drawFlagCheck = os.ui.timeline.AbstractTimelineCtrl.drawFlagCheck;
   brush.setExtent([range.start, range.end]);
   brush.listen('deleted', this.loadBrushDeleted_.bind(this));
   brush.listen(goog.events.EventType.PROPERTYCHANGE, this.loadBrushPropertyChanged_.bind(this));
@@ -1098,9 +1098,7 @@ os.ui.timeline.AbstractTimelineCtrl.prototype.getAnimateBrush = function(range) 
   brush.setEventType(os.ui.timeline.Brush.EventType.BRUSH_END);
   brush.setToolTip('The playback loop');
   brush.canDelete = true;
-  brush.drawFlagCheck = function() {
-    return !os.ui.timeline.AbstractTimelineCtrl.collapsed;
-  };
+  brush.drawFlagCheck = os.ui.timeline.AbstractTimelineCtrl.drawFlagCheck;
   brush.setExtent([range.start, range.end]);
   brush.listen('deleted', this.animateBrushDeleted_.bind(this));
   brush.listen(goog.events.EventType.PROPERTYCHANGE, this.animateBrushPropertyChanged_.bind(this));
@@ -1121,9 +1119,7 @@ os.ui.timeline.AbstractTimelineCtrl.prototype.getHoldBrush = function(range) {
   brush.setClass('hold');
   brush.setToolTip('The hold range');
   brush.canDelete = true;
-  brush.drawFlagCheck = function() {
-    return !os.ui.timeline.AbstractTimelineCtrl.collapsed;
-  };
+  brush.drawFlagCheck = os.ui.timeline.AbstractTimelineCtrl.drawFlagCheck;
   brush.setExtent([range.start, range.end]);
   brush.listen('deleted', this.holdBrushDeleted_.bind(this));
   brush.listen(goog.events.EventType.PROPERTYCHANGE, this.holdBrushPropertyChanged_.bind(this));
@@ -1381,6 +1377,11 @@ os.ui.timeline.AbstractTimelineCtrl.prototype.initMenus = function() {
           handler: this.onMenuEvent.bind(this),
           sort: 0
         }]
+      }, {
+        type: os.ui.menu.MenuItemType.GROUP,
+        label: 'Data',
+        children: [],
+        sort: 20
       }]
     }));
 

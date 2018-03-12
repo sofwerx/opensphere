@@ -2,6 +2,7 @@ goog.provide('os.ui.ol.OLMap');
 
 goog.require('goog.events.EventTarget');
 goog.require('goog.events.MouseWheelHandler');
+goog.require('goog.log');
 goog.require('goog.math.Coordinate');
 goog.require('ol');
 goog.require('ol.Feature');
@@ -28,8 +29,8 @@ goog.require('ol.style.Stroke');
 goog.require('ol.style.Style');
 goog.require('ol.tilegrid.TileGrid');
 goog.require('os.fn');
+goog.require('os.map.IMapContainer');
 goog.require('os.ol.source.XYZ');
-goog.require('os.ui.ol.IMap');
 goog.require('os.ui.ol.control.LayerSwitcher');
 goog.require('os.ui.ol.interaction.AreaHover');
 goog.require('os.ui.ol.interaction.FocusInteraction');
@@ -39,9 +40,9 @@ goog.require('os.ui.query.AreaManager');
 
 
 /**
- * A basic implementation of an OpenLayers3 map. Attaches itself in the DOM to the passed in selector. Creates a
+ * A basic implementation of an Openlayers map. Attaches itself in the DOM to the passed in selector. Creates a
  * basic vector layer for drawings/shapes. Adds a base set of maps from localStorage layer configs.
- * @implements {os.ui.ol.IMap}
+ * @implements {os.map.IMapContainer}
  * @extends {goog.events.EventTarget}
  * @constructor
  */
@@ -49,7 +50,8 @@ os.ui.ol.OLMap = function() {
   os.ui.ol.OLMap.base(this, 'constructor');
 
   /**
-   * @type {?ol.Map}
+   * The Openlayers map.
+   * @type {ol.PluggableMap}
    * @private
    */
   this.map_ = null;
@@ -70,6 +72,15 @@ os.ui.ol.OLMap = function() {
   os.dispatcher.listen(os.ui.action.EventType.ZOOM, this.onZoom_, false, this);
 };
 goog.inherits(os.ui.ol.OLMap, goog.events.EventTarget);
+
+
+/**
+ * Logger
+ * @type {goog.log.Logger}
+ * @private
+ * @const
+ */
+os.ui.ol.OLMap.LOGGER_ = goog.log.getLogger('os.ui.ol.OLMap');
 
 
 /**
@@ -364,7 +375,7 @@ os.ui.ol.OLMap.prototype.getInteractions_ = function() {
 
 /**
  * Gets the map layers.
- * @return {Array.<ol.layer.Base>}
+ * @return {Array<ol.layer.Base>}
  * @private
  */
 os.ui.ol.OLMap.prototype.getLayers_ = function() {

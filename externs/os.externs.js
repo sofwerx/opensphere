@@ -99,6 +99,13 @@ osx.map.CameraState;
  * @typedef {{
  *   altitude: (number|undefined),
  *   center: (ol.Coordinate|undefined),
+ *   duration: (number|undefined),
+ *   flightMode: (os.FlightMode|undefined),
+ *   positionCamera: (boolean|undefined),
+ *   heading: (number|undefined),
+ *   pitch: (number|undefined),
+ *   range: (number|undefined),
+ *   roll: (number|undefined),
  *   zoom: (number|undefined)
  * }}
  */
@@ -341,8 +348,10 @@ osx.window.WindowOptions;
  *   cancel: (Function|undefined),
  *   yesText: (string|undefined),
  *   yesIcon: (string|undefined),
+ *   yesButtonTitle: (string|undefined),
  *   noText: (string|undefined),
  *   noIcon: (string|undefined),
+ *   noButtonTitle: (string|undefined),
  *   formClass: (string|undefined),
  *
  *   windowOptions: (osx.window.WindowOptions|undefined),

@@ -32,6 +32,14 @@ os.ui.sanitize_;
 
 
 /**
+ * CSS selector for modal backdrops.
+ * @type {string}
+ * @const
+ */
+os.ui.MODAL_SELECTOR = '.modal-backdrop,.window-modal-bg';
+
+
+/**
  * Sanitizes a string to remove potentally malicious HTML content. Note that if the entire string is disallowed by the
  * $sanitize service, you'll get an empty string back.
  * @param {string} value The value to sanitize
@@ -403,7 +411,8 @@ os.ui.replaceDirective = function(name, module, directiveFn, opt_priority) {
 
       // Select2 has trouble with Bootstrap modals in IE only
       if (goog.userAgent.IE) {
-        $.fn.modal['Constructor'].prototype['enforceFocus'] = function() {};
+        // so tell it to do nothing
+        $.fn.modal['Constructor'].prototype['enforceFocus'] = goog.nullFunction;
       }
 
       // Overwriting enforceFocus and extending functionality

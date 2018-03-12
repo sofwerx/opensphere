@@ -1098,6 +1098,7 @@ os.olcs.sync.FeatureConverter.prototype.getHeightReference = function(layer, fea
  * @param {!os.olcs.VectorContext} context
  * @param {!ol.style.Style} style The OL3 style
  * @param {(Cesium.Billboard|Cesium.optionsBillboardCollectionAdd)=} opt_billboard The billboard, for updates
+ * @suppress {checkTypes}
  */
 os.olcs.sync.FeatureConverter.prototype.createOrUpdateBillboard = function(feature, geometry, context, style,
     opt_billboard) {
@@ -1131,7 +1132,7 @@ os.olcs.sync.FeatureConverter.prototype.createOrUpdateBillboard = function(featu
         }
 
         // try creating/updating again as long as the image isn't in the error state
-        if (imageStyle.getImageState() < ol.ImageState.ERROR) {
+        if (imageStyle.getImageState() < ol.ImageState.ERROR && context.featureToShownMap[feature['id']]) {
           // if the billboard has already been created, make sure it's still in the collection
           if (!(opt_billboard instanceof Cesium.Billboard) ||
               (context.billboards && context.billboards.contains(opt_billboard))) {
@@ -1393,7 +1394,7 @@ os.olcs.sync.FeatureConverter.prototype.olMultiGeometryToCesium = function(featu
       geometry = /** @type {!ol.geom.MultiLineString} */ (geometry);
       subGeos = geometry.getLineStrings();
 
-      if (geometry.get(os.geom.GeometryField.DYNAMIC)) {
+      if (feature instanceof os.feature.DynamicFeature) {
         // dynamic lines may change frequently and should use Cesium.Polyline to avoid recreating on each change,
         // which will cause a flicker while the new Primitive is loaded to the GPU.
         subGeos.forEach(function(subGeo) {
@@ -1562,7 +1563,7 @@ os.olcs.sync.FeatureConverter.prototype.olGeometryToCesium = function(feature, g
         geometry = /** @type {!ol.geom.LineString} */ (geometry);
 
         // TODO: both of these should be replaced by the Entity API (polyline/polylineVolume)
-        if (geometry.get(os.geom.GeometryField.DYNAMIC)) {
+        if (feature instanceof os.feature.DynamicFeature) {
           // dynamic lines may change frequently and should use Cesium.Polyline to avoid recreating on each change,
           // which will cause a flicker while the new Primitive is loaded to the GPU.
           this.createOrUpdatePolyline(feature, geometry, context, style);

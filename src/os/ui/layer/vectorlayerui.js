@@ -10,9 +10,12 @@ goog.require('os.command.VectorLayerLabel');
 goog.require('os.command.VectorLayerLabelColor');
 goog.require('os.command.VectorLayerLabelSize');
 goog.require('os.command.VectorLayerReplaceStyle');
+goog.require('os.command.VectorLayerRotation');
 goog.require('os.command.VectorLayerShape');
 goog.require('os.command.VectorLayerShowLabel');
+goog.require('os.command.VectorLayerShowRotation');
 goog.require('os.command.VectorLayerSize');
+goog.require('os.command.VectorUniqueIdCmd');
 goog.require('os.data.OSDataManager');
 goog.require('os.defines');
 goog.require('os.style');
@@ -22,6 +25,7 @@ goog.require('os.ui.icon.IconPickerEventType');
 goog.require('os.ui.layer');
 goog.require('os.ui.layer.DefaultLayerUICtrl');
 goog.require('os.ui.layer.ellipseOptionsDirective');
+goog.require('os.ui.layer.iconStyleControlsDirective');
 goog.require('os.ui.layer.labelControlsDirective');
 goog.require('os.ui.layer.lobOptionsDirective');
 goog.require('os.ui.layer.vectorStyleControlsDirective');
@@ -86,10 +90,22 @@ os.ui.layer.VectorLayerUICtrl = function($scope, $element, $timeout) {
   this['replaceStyle'] = false;
 
   /**
-   * Bound function for the uiswitch directive.
+   * Bound function for the uiswitch shape directive.
    * @type {function():string}
    */
   this['getShapeUI'] = this.getShapeUIInternal.bind(this);
+
+  /**
+   * The Show Icon Rotation checkbox state.
+   * @type {boolean}
+   */
+  this['showRotation'] = false;
+
+  /**
+   * The column used for the rotation
+   * @type {string}
+   */
+  this['rotationColumn'] = '';
 
   os.ui.layer.VectorLayerUICtrl.base(this, 'constructor', $scope, $element, $timeout);
   this.defaultColorControl = os.ui.ColorControlType.PICKER;
@@ -115,6 +131,8 @@ os.ui.layer.VectorLayerUICtrl = function($scope, $element, $timeout) {
 
   $scope.$on(os.ui.layer.LabelControlsEventType.COLUMN_CHANGE, this.onLabelColumnChange.bind(this));
   $scope.$on(os.ui.layer.LabelControlsEventType.SHOW_LABELS_CHANGE, this.onShowLabelsChange.bind(this));
+  $scope.$on(os.ui.layer.VectorStyleControlsEventType.SHOW_ROTATION_CHANGE, this.onShowRotationChange_.bind(this));
+  $scope.$on(os.ui.layer.VectorStyleControlsEventType.ROTATION_COLUMN_CHANGE, this.onRotationColumnChange_.bind(this));
 };
 goog.inherits(os.ui.layer.VectorLayerUICtrl, os.ui.layer.DefaultLayerUICtrl);
 
@@ -136,12 +154,21 @@ os.ui.layer.VectorLayerUICtrl.prototype.initUI = function() {
     this.scope['centerShapes'] = this.getCenterShapes_();
     this.scope['lockable'] = this.getLockable_();
     this.scope['altitude'] = this.getAltitudeEnabled_();
+    this['columns'] = this.getValue(os.ui.layer.getColumns);
+    this['showRotation'] = this.getShowRotation_();
+    this['rotationColumn'] = this.getRotationColumn_();
+    if (goog.string.isEmpty(this['rotationColumn']) && this.canUseBearing()) { // try to autodetect bearing if undefined
+      this['rotationColumn'] = os.Fields.BEARING;
+      this.onRotationColumnChange(this['rotationColumn']);
+    }
+
 
     this.updateReplaceStyle_();
 
     if (this.scope['items'] && this.scope['items'].length == 1) {
       // NOTE: This initUI method can get called a-lot, depending on some events that get routed to this method.
       this.scope['columns'] = this.getValue(os.ui.layer.getColumns);
+      this['uniqueId'] = this.getValue(os.ui.layer.getUniqueId);
 
       this.reconcileLabelsState_();
 
@@ -188,6 +215,25 @@ os.ui.layer.VectorLayerUICtrl.prototype.getShapeUIInternal = function() {
 
   return undefined;
 };
+
+
+/**
+ * Decide when to show the rotation option
+ * @return {boolean}
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.showRotationOption = function() {
+  if (this.scope != null) {
+    var shape = this.scope['shape'] || '';
+    var centr = this.scope['centerShape'] || '';
+    return shape == os.style.ShapeType.ICON || (os.style.CENTER_REGEXP.test(shape) && centr == os.style.ShapeType.ICON);
+  }
+
+  return false;
+};
+goog.exportProperty(
+    os.ui.layer.VectorLayerUICtrl.prototype,
+    'showRotationOption',
+    os.ui.layer.VectorLayerUICtrl.prototype.showRotationOption);
 
 
 /**
@@ -829,3 +875,143 @@ goog.exportProperty(
     os.ui.layer.VectorLayerUICtrl.prototype,
     'onAltitudeChange',
     os.ui.layer.VectorLayerUICtrl.prototype.onAltitudeChange);
+
+
+/**
+ * Set the unique ID field of the source.
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.onUniqueIdChange = function() {
+  var nodes = this.getLayerNodes();
+  if (nodes && nodes.length > 0) {
+    var uniqueId = /** @type {os.data.ColumnDefinition} */ (this['uniqueId']);
+    var fn =
+        /**
+         * @param {os.layer.ILayer} layer
+         * @return {os.command.ICommand}
+         */
+        function(layer) {
+          return new os.command.VectorUniqueIdCmd(layer.getId(), uniqueId);
+        };
+
+    this.createCommand(fn);
+  }
+};
+goog.exportProperty(
+    os.ui.layer.VectorLayerUICtrl.prototype,
+    'onUniqueIdChange',
+    os.ui.layer.VectorLayerUICtrl.prototype.onUniqueIdChange);
+
+
+/**
+ * Fall back to auto-detected bearing
+ * @return {boolean}
+ * @protected
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.canUseBearing = function() {
+  var items = /** @type {Array<!os.data.LayerNode>} */ (this.scope['items']);
+  var layer = items[0].getLayer();
+  if (layer) {
+    var source = /** @type {os.layer.Vector} */ (layer).getSource();
+    if (source && os.instanceOf(source, os.source.Vector.NAME)) {
+      source = /** @type {!os.source.Vector} */ (source);
+      if (!source.hasColumn(os.Fields.BEARING)) {
+        return false;
+      }
+      return true;
+    }
+  }
+  return false;
+};
+
+
+
+/**
+ * The column for the icon rotation
+ * @return {string}
+ * @private
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.getRotationColumn_ = function() {
+  var items = /** @type {Array<!os.data.LayerNode>} */ (this.scope['items']);
+  if (items && items.length > 0) {
+    var config = os.style.StyleManager.getInstance().getLayerConfig(items[0].getId());
+    if (config) {
+      return config[os.style.StyleField.ROTATION_COLUMN];
+    }
+  }
+
+  return '';
+};
+
+
+/**
+ * If arrow should be displayed for the layer(s).
+ * @return {boolean}
+ * @private
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.getShowRotation_ = function() {
+  var items = /** @type {Array<!os.data.LayerNode>} */ (this.scope['items']);
+  if (items && items.length > 0) {
+    var config = os.style.StyleManager.getInstance().getLayerConfig(items[0].getId());
+    if (config) {
+      return !!config[os.style.StyleField.SHOW_ROTATION];
+    }
+  }
+
+  return false;
+};
+
+
+/**
+ * Handle changes to the Show Rotation option.
+ * @param {angular.Scope.Event} event
+ * @param {boolean} value
+ * @private
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.onShowRotationChange_ = function(event, value) {
+  var items = /** @type {Array} */ (this.scope['items']);
+  if (items && items.length > 0) {
+    var fn =
+        /**
+         * @param {os.layer.ILayer} layer
+         * @return {os.command.ICommand}
+         */
+        function(layer) {
+          return new os.command.VectorLayerShowRotation(layer.getId(), value);
+        };
+
+    this.createCommand(fn);
+  }
+};
+
+
+/**
+ * Handles column changes to the rotation
+ * @param {angular.Scope.Event} event
+ * @param {string} value
+ * @private
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.onRotationColumnChange_ = function(event, value) {
+  this.onRotationColumnChange(value);
+};
+
+
+/**
+ * Notify column changes to the rotation
+ * @param {string} value
+ * @protected
+ */
+os.ui.layer.VectorLayerUICtrl.prototype.onRotationColumnChange = function(value) {
+  var items = /** @type {Array} */ (this.scope['items']);
+  if (items && items.length > 0) {
+    var fn = goog.bind(
+        /**
+         * @param {os.layer.ILayer} layer
+         * @return {os.command.ICommand}
+         */
+        function(layer) {
+          return new os.command.VectorLayerRotation(layer.getId(), value);
+        }, this);
+
+    this.createCommand(fn);
+  }
+};

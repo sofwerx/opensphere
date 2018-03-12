@@ -183,11 +183,8 @@ os.ui.menu.MenuItem.prototype.render = function(context, opt_target) {
     return childHtml;
   }
 
-  if (!childHtml && type === types.SUBMENU) {
-    enabled = false;
-  }
-
-  if (!childHtml && type === types.GROUP) {
+  // hide groups/submenus without children from the menu
+  if (!childHtml && (type === types.GROUP || type === types.SUBMENU)) {
     visible = false;
   }
 

@@ -9,10 +9,6 @@ goog.require('ol.ViewHint');
 goog.require('os.MapContainer');
 goog.require('os.MapEvent');
 goog.require('os.action.EventType');
-goog.require('os.action.buffer');
-goog.require('os.action.import');
-goog.require('os.action.layer');
-goog.require('os.action.windows');
 goog.require('os.bearing.BearingSettings');
 goog.require('os.buffer');
 goog.require('os.column.ColumnMappingManager');
@@ -49,6 +45,7 @@ goog.require('os.im.FeatureImporter');
 goog.require('os.im.ImportProcess');
 goog.require('os.im.mapping');
 goog.require('os.im.mapping.AltMapping');
+goog.require('os.im.mapping.BearingMapping');
 goog.require('os.im.mapping.LatMapping');
 goog.require('os.im.mapping.LonMapping');
 goog.require('os.im.mapping.MappingManager');
@@ -85,7 +82,6 @@ goog.require('os.style.StyleManager');
 goog.require('os.time');
 goog.require('os.time.TimelineController');
 goog.require('os.ui.AbstractMainCtrl');
-goog.require('os.ui.action.windows');
 goog.require('os.ui.alertsDirective');
 goog.require('os.ui.areasDirective');
 goog.require('os.ui.clear.ClearEntry');
@@ -112,20 +108,25 @@ goog.require('os.ui.im.ImportEventType');
 goog.require('os.ui.im.ImportManager');
 goog.require('os.ui.menu');
 goog.require('os.ui.menu.areaImport');
+goog.require('os.ui.menu.buffer');
 goog.require('os.ui.menu.filter');
+goog.require('os.ui.menu.import');
+goog.require('os.ui.menu.layer');
 goog.require('os.ui.menu.map');
 goog.require('os.ui.menu.save');
 goog.require('os.ui.menu.spatial');
 goog.require('os.ui.menu.timeline');
 goog.require('os.ui.menu.unit');
+goog.require('os.ui.menu.windows');
+goog.require('os.ui.menu.windows.default');
 goog.require('os.ui.ngRightClickDirective');
 goog.require('os.ui.query.cmd.QueryEntriesClear');
 goog.require('os.ui.route.RouteManager');
 goog.require('os.ui.search.NoResult');
 goog.require('os.ui.search.place.CoordinateSearch');
 goog.require('os.ui.slick.column');
-goog.require('os.ui.state.action');
 goog.require('os.ui.state.cmd.StateClear');
+goog.require('os.ui.state.menu');
 goog.require('os.ui.timelinePanelDirective');
 goog.require('os.ui.urlDragDropDirective');
 goog.require('os.ui.user.settings.LocationSettings');
@@ -144,14 +145,15 @@ goog.require('plugin.file.shp.SHPPlugin');
 goog.require('plugin.google.places.Plugin');
 goog.require('plugin.heatmap.HeatmapPlugin');
 goog.require('plugin.im.action.feature.Plugin');
-goog.require('plugin.mapzen.places.Plugin');
 goog.require('plugin.ogc.OGCPlugin');
 goog.require('plugin.osm.nom.NominatimPlugin');
 goog.require('plugin.overview.OverviewPlugin');
 goog.require('plugin.params.ParamsPlugin');
+goog.require('plugin.pelias.geocoder.Plugin');
 goog.require('plugin.places.PlacesPlugin');
 goog.require('plugin.position.PositionPlugin');
 goog.require('plugin.suncalc.Plugin');
+goog.require('plugin.track.TrackPlugin');
 goog.require('plugin.vectortools.VectorToolsPlugin');
 goog.require('plugin.weather.WeatherPlugin');
 goog.require('plugin.xyz.XYZPlugin');
@@ -281,22 +283,19 @@ os.MainCtrl = function($scope, $element, $compile, $timeout, $injector) {
 
   // set up menus
   os.ui.menu.filter.setup();
+  os.ui.menu.import.setup();
   os.ui.menu.map.setup();
+  os.ui.menu.layer.setup();
   os.ui.menu.save.setup();
   os.ui.menu.spatial.setup();
   os.ui.menu.unit.setup();
   os.ui.menu.timeline.setup();
+  os.ui.state.menu.setup();
+  os.ui.menu.buffer.setup();
+  os.ui.menu.windows.default.setup();
 
   // assign the spatial menu
   os.ui.draw.MENU = os.ui.menu.SPATIAL;
-
-  // set up actions
-  os.action.import.setup();
-  os.action.layer.setup();
-  os.action.buffer.setup();
-  os.action.windows.setup();
-
-  os.ui.state.action.setup();
 
   // register base legend plugins
   os.data.histo.legend.registerLegendPlugin();
@@ -307,6 +306,9 @@ os.MainCtrl = function($scope, $element, $compile, $timeout, $injector) {
   map.setControlFunction(os.control.getControls);
 
   map.listenOnce(os.MapEvent.MAP_READY, this.onMapReady_, false, this);
+
+  // set the global map container reference
+  os.map.mapContainer = os.MapContainer.getInstance();
 
   // init filter manager
   os.filterManager = os.query.FilterManager.getInstance();
@@ -355,18 +357,18 @@ os.MainCtrl.LOGGER_ = goog.log.getLogger('os.MainCtrl');
 os.MainCtrl.prototype.destroy = function() {
   this.removeListeners();
 
-  os.action.import.dispose();
-  os.action.layer.dispose();
-  os.ui.state.action.dispose();
-  os.action.buffer.dispose();
+  os.ui.menu.import.dispose();
+  os.ui.menu.buffer.dispose();
   os.ui.menu.areaImport.dispose();
 
   os.ui.menu.filter.dispose();
   os.ui.menu.map.dispose();
+  os.ui.menu.layer.dispose();
   os.ui.menu.save.dispose();
   os.ui.menu.spatial.dispose();
   os.ui.menu.timeline.dispose();
   os.ui.menu.unit.dispose();
+  os.ui.state.menu.dispose();
 
   this.scope_ = null;
   this.timeout_ = null;
@@ -497,7 +499,7 @@ os.MainCtrl.prototype.addPlugins = function() {
   os.ui.pluginManager.addPlugin(new plugin.xyz.XYZPlugin());
   os.ui.pluginManager.addPlugin(new plugin.basemap.BaseMapPlugin());
   os.ui.pluginManager.addPlugin(new plugin.google.places.Plugin());
-  os.ui.pluginManager.addPlugin(new plugin.mapzen.places.Plugin());
+  os.ui.pluginManager.addPlugin(new plugin.pelias.geocoder.Plugin());
   os.ui.pluginManager.addPlugin(new plugin.osm.nom.NominatimPlugin());
   os.ui.pluginManager.addPlugin(new plugin.file.csv.CSVPlugin());
   os.ui.pluginManager.addPlugin(new plugin.file.kml.KMLPlugin());
@@ -513,6 +515,7 @@ os.MainCtrl.prototype.addPlugins = function() {
   os.ui.pluginManager.addPlugin(plugin.heatmap.HeatmapPlugin.getInstance());
   os.ui.pluginManager.addPlugin(plugin.params.ParamsPlugin.getInstance());
   os.ui.pluginManager.addPlugin(plugin.suncalc.Plugin.getInstance());
+  os.ui.pluginManager.addPlugin(plugin.track.TrackPlugin.getInstance());
 };
 
 
@@ -683,7 +686,7 @@ os.MainCtrl.prototype.handleKeyEvent_ = function(event) {
   var target = /** @type {Element} */ (event.target);
   var ctrlOr = os.isOSX() ? event.metaKey : event.ctrlKey;
 
-  if (!document.querySelector('.modal-backdrop')) {
+  if (!document.querySelector(os.ui.MODAL_SELECTOR)) {
     if (target.tagName !== goog.dom.TagName.INPUT.toString() &&
         target.tagName !== goog.dom.TagName.TEXTAREA.toString()) {
       switch (event.keyCode) {
@@ -717,7 +720,7 @@ os.MainCtrl.prototype.handleKeyEvent_ = function(event) {
       case goog.events.KeyCodes.L:
         if (event.altKey) {
           os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.OPEN_LAYERS_KB, 1);
-          os.ui.action.windows.openWindow('layers');
+          os.ui.menu.windows.openWindow('layers');
         }
         break;
       case goog.events.KeyCodes.O:
@@ -765,6 +768,7 @@ os.MainCtrl.prototype.registerMappings_ = function() {
   mm.registerMapping(new os.im.mapping.LatMapping());
   mm.registerMapping(new os.im.mapping.LonMapping());
   mm.registerMapping(new os.im.mapping.PositionMapping());
+  mm.registerMapping(new os.im.mapping.BearingMapping());
   mm.registerMapping(new os.im.mapping.AltMapping());
 
   // register ellipse mappings
@@ -886,7 +890,7 @@ os.MainCtrl.prototype.onToggleUI_ = function(event) {
       os.ui.apply(this.scope);
     }
   } else {
-    os.ui.action.windows.openWindow(event.id);
+    os.ui.menu.windows.openWindow(event.id);
   }
 
   if (event.metricKey) {
@@ -911,9 +915,16 @@ os.MainCtrl.prototype.onToggleUI_ = function(event) {
 os.MainCtrl.prototype.handleFileDrop_ = function(files) {
   var file = files[0];
 
-  var reader = os.file.createFromFile(file);
-  if (reader) {
-    reader.addCallbacks(this.handleResult_, this.handleError_, this);
+  if (file) {
+    if (file.path && os.file.FILE_URL_ENABLED) {
+      // running in Electron, so request the file with a file:// URL
+      this.handleURLDrop_(os.file.getFileUrl(file.path));
+    } else {
+      var reader = os.file.createFromFile(file);
+      if (reader) {
+        reader.addCallbacks(this.handleResult_, this.handleError_, this);
+      }
+    }
   }
 };
 

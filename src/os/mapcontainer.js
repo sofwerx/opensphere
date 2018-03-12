@@ -21,8 +21,8 @@ goog.require('ol.MapEventType');
 goog.require('ol.ObjectEventType');
 goog.require('ol.View');
 goog.require('ol.ViewHint');
+goog.require('ol.easing');
 goog.require('ol.events');
-goog.require('ol.geom.Point');
 goog.require('ol.layer.Tile');
 goog.require('ol.layer.Vector');
 goog.require('ol.proj');
@@ -61,6 +61,7 @@ goog.require('os.layer.LayerType');
 goog.require('os.layer.Terrain');
 goog.require('os.layer.Vector');
 goog.require('os.map');
+goog.require('os.map.IMapContainer');
 goog.require('os.metrics');
 goog.require('os.metrics.Metrics');
 goog.require('os.mixin.renderloop');
@@ -79,8 +80,8 @@ goog.require('os.style.label');
 goog.require('os.ui.GlobalMenuCtrl');
 goog.require('os.ui.action.ActionEvent');
 goog.require('os.ui.help.Controls');
+goog.require('os.ui.help.webGLPerfCaveatDirective');
 goog.require('os.ui.help.webGLSupportDirective');
-goog.require('os.ui.ol.IMap');
 goog.require('os.ui.window');
 goog.require('os.webgl');
 goog.require('plugin.position.copyPositionDirective');
@@ -88,8 +89,8 @@ goog.require('plugin.position.copyPositionDirective');
 
 
 /**
- * Wrapper for the ol3 map.
- * @implements {os.ui.ol.IMap}
+ * Wrapper for the Openlayers map.
+ * @implements {os.map.IMapContainer}
  * @extends {goog.events.EventTarget}
  * @constructor
  */
@@ -97,18 +98,21 @@ os.MapContainer = function() {
   os.MapContainer.base(this, 'constructor');
 
   /**
+   * The Openlayers map.
    * @type {os.Map}
    * @private
    */
   this.map_ = null;
 
   /**
+   * The Openlayers/Cesium synchronizer.
    * @type {olcs.OLCesium}
    * @private
    */
   this.olCesium_ = null;
 
   /**
+   * The root Cesium synchronizer.
    * @type {os.olcs.sync.RootSynchronizer}
    * @private
    */
@@ -126,6 +130,12 @@ os.MapContainer = function() {
    * @private
    */
   this.is3DSupported_ = undefined;
+
+  /**
+   * @type {boolean|undefined|null}
+   * @private
+   */
+  this.hasPerformanceCaveat_ = undefined;
 
   /**
    * Cesium terrain provider
@@ -203,6 +213,12 @@ os.MapContainer = function() {
    */
   this.vsm_ = new goog.dom.ViewportSizeMonitor();
 
+  /**
+   * @type {boolean}
+   * @private
+   */
+  this.overrideFailIfMajorPerformanceCaveat_ = false;
+
   os.dispatcher.listen(os.ui.action.EventType.ZOOM, this.onZoom_, false, this);
 
   os.dispatcher.listen(os.action.EventType.RESET_VIEW, this.resetView, false, this);
@@ -231,27 +247,11 @@ os.MapContainer.DRAW_ID = os.layer.Drawing.ID;
 
 
 /**
- * The ID for the search layer
- * @type {string}
- * @const
- */
-os.MapContainer.SEARCH_ID = 'search';
-
-
-/**
  * The map target element id.
  * @type {string}
  * @const
  */
 os.MapContainer.TARGET = 'map-container';
-
-
-/**
- * View changed event string
- * @type {string}
- * @const
- */
-os.MapContainer.VIEW_CHANGED = 'viewChanged';
 
 
 /**
@@ -422,10 +422,7 @@ os.MapContainer.prototype.handleViewChange_ = function() {
     }
   }
 
-  this.dispatchEvent(os.MapContainer.VIEW_CHANGED); // let other tools know the view is done changing
-
   os.style.label.updateShown();
-
   this.dispatchEvent(os.MapEvent.VIEW_CHANGE);
 };
 
@@ -599,6 +596,7 @@ os.MapContainer.prototype.updateSize = function() {
 
 /**
  * @return {os.Map}
+ * @override
  */
 os.MapContainer.prototype.getMap = function() {
   return this.map_;
@@ -641,7 +639,7 @@ os.MapContainer.isTileLayer = function(layer) {
  * @return {boolean}
  */
 os.MapContainer.isVectorLayer = function(layer) {
-  return layer instanceof ol.layer.Vector;
+  return layer instanceof ol.layer.Vector && !os.MapContainer.isImageLayer(layer);
 };
 
 
@@ -651,55 +649,78 @@ os.MapContainer.isVectorLayer = function(layer) {
  * @return {boolean}
  */
 os.MapContainer.isImageLayer = function(layer) {
-  return layer instanceof ol.layer.Image;
+  return layer instanceof ol.layer.Image ||
+      (layer instanceof os.layer.Vector && layer.getOSType() === os.layer.LayerType.IMAGE);
+};
+
+
+/**
+ * Cancels the current camera flight if one is in progress. The camera is left at it's current location.
+ */
+os.MapContainer.prototype.cancelFlight = function() {
+  if (this.is3DEnabled()) {
+    var camera = this.getCesiumCamera();
+    if (camera) {
+      camera.cancelFlight();
+    }
+  } else {
+    var map = this.getMap();
+    var view = map ? map.getView() : undefined;
+    if (view) {
+      view.cancelAnimations();
+    }
+  }
 };
 
 
 /**
  * Flies to the provided coordinate/zoom level.
- * @param {!osx.map.FlyToOptions} options The fly to options
+ * @param {!osx.map.FlyToOptions} options The fly to options.
  */
 os.MapContainer.prototype.flyTo = function(options) {
   var map = this.getMap();
-  if (map && (goog.isDef(options.center) || goog.isDef(options.zoom) || goog.isDef(options.altitude))) {
+  if (map) {
     os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.FLY_TO, 1);
     var view = map.getView();
     goog.asserts.assert(view);
 
-    var oldCenter = view.getCenter();
-    var oldResolution = view.getResolution();
-    goog.asserts.assert(goog.isDef(oldCenter));
-    goog.asserts.assert(oldResolution);
-
-    var newCenter = options.center || oldCenter;
+    var center = options.destination || options.center || view.getCenter();
+    var duration = options.duration || os.MapContainer.FLY_ZOOM_DURATION;
 
     if (this.is3DEnabled()) {
       var camera = this.getCesiumCamera();
       if (camera) {
-        var altitude;
-
         // favor altitude over zoom in 3D mode
-        if (goog.isDef(options.altitude)) {
-          altitude = options.altitude;
-        } else if (goog.isDef(options.zoom)) {
-          altitude = camera.calcDistanceForResolution(this.zoomToResolution(options.zoom),
-              ol.math.toRadians(newCenter[1]));
+        if (options.altitude === undefined && options.zoom !== undefined) {
+          options.altitude = camera.calcDistanceForResolution(this.zoomToResolution(options.zoom),
+              ol.math.toRadians(center[1]));
+          delete options.zoom;
         }
 
-        camera.flyTo(newCenter, altitude, os.MapContainer.FLY_ZOOM_DURATION);
+        camera.flyTo(options);
       }
     } else {
       var animateOptions = /** @type {!olx.AnimationOptions} */ ({
-        center: newCenter,
-        duration: os.MapContainer.FLY_ZOOM_DURATION
+        center: center,
+        duration: duration
       });
 
-      // favor zoom over altitude in 2D mode
-      if (options.zoom != null) {
+      if (options.zoom !== undefined) {
+        // prioritize zoom in 2D mode
         animateOptions.zoom = goog.math.clamp(options.zoom, os.map.MIN_ZOOM, os.map.MAX_ZOOM);
-      } else if (options.altitude != null) {
+      } else if (!options.positionCamera && options.range !== undefined) {
+        // telling the camera where to look, so a range will generally be specified
+        var resolution = os.map.resolutionForDistance(this.getMap(), options.range, 0);
+        animateOptions.resolution = goog.math.clamp(resolution, os.map.MIN_RESOLUTION, os.map.MAX_RESOLUTION);
+      } else if (options.altitude !== undefined) {
+        // try altitude last, because it will generally be 0 if positioning the camera
         var resolution = os.map.resolutionForDistance(this.getMap(), options.altitude, 0);
         animateOptions.resolution = goog.math.clamp(resolution, os.map.MIN_RESOLUTION, os.map.MAX_RESOLUTION);
+      }
+
+      // 'bounce' uses default easing, 'smooth' uses linear.
+      if (options.flightMode === os.FlightMode.SMOOTH) {
+        animateOptions.easing = ol.easing.linear;
       }
 
       view.animate(animateOptions);
@@ -771,7 +792,11 @@ os.MapContainer.prototype.flyToExtent = function(extent, opt_buffer, opt_maxZoom
           }
 
           var altitude = camera.calcDistanceForResolution(resolution, 0);
-          camera.flyTo(center, altitude, os.MapContainer.FLY_ZOOM_DURATION);
+          camera.flyTo(/** @type {!osx.map.FlyToOptions} */ ({
+            center: center,
+            altitude: altitude,
+            duration: os.MapContainer.FLY_ZOOM_DURATION
+          }));
         }
       }
     }
@@ -877,8 +902,8 @@ os.MapContainer.prototype.resetRotation = function() {
 
 /**
  * Fix focus. For whatever reason, the canvas is not considered focusable by the browser. This is usually fixed by
- * adding tabindex="0" to the canvas, but OL3 and Cesium control those elements. Instead, we'll just manually blur
- * the active element when the map viewport is clicked.
+ * adding tabindex="0" to the canvas, but Openlayers and Cesium control those elements. Instead, we'll just manually
+ * blur the active element when the map viewport is clicked.
  *
  * @private
  */
@@ -933,7 +958,7 @@ os.MapContainer.prototype.addHelpControls_ = function() {
       [goog.events.KeyCodes.PAGE_UP, 'or', goog.events.KeyCodes.PAGE_DOWN]);
   controls.addControl(zoomGrp, 3, 'Zoom In/Out', null, ['+', '/', '=', 'or', '-', '/', '_']);
 
-  if (this.is3DSupported()) {
+  if (this.is3DSupported() && !this.failPerformanceCaveat()) {
     var grp3D = '3D Controls';
     controls = os.ui.help.Controls.getInstance();
     controls.addControl(grp3D, 4, 'Tilt Globe',
@@ -1039,6 +1064,8 @@ os.MapContainer.prototype.init = function() {
       referenceGroup,
       imageGroup
     ]),
+    // prevents a blank map while flyTo animates
+    loadTilesWhileAnimating: true,
     renderer: ol.renderer.Type.CANVAS,
     target: os.MapContainer.TARGET,
     view: view,
@@ -1146,8 +1173,14 @@ os.MapContainer.prototype.onToggleView_ = function() {
   var useCesium = !this.is3DEnabled();
 
   // prompt the user if they try to enable Cesium and it isn't supported
-  if (useCesium && !this.is3DSupported()) {
-    os.ui.help.launchWebGLSupportDialog('3D Globe Not Supported');
+  if (useCesium) {
+    if (this.failPerformanceCaveat()) {
+      var preventOverride =
+        /** @type {boolean} */ (os.settings.get('webgl.performanceCaveat.preventOverride', false));
+
+      os.ui.help.launchWebGLPerfCaveatDialog('3D Globe Performance Issue',
+          preventOverride ? undefined : this.overrideFailIfPerformanceCaveat.bind(this));
+    }
   }
 
   var code = os.map.PROJECTION.getCode();
@@ -1155,6 +1188,15 @@ os.MapContainer.prototype.onToggleView_ = function() {
     var cmd = new os.command.ToggleCesium(useCesium);
     os.command.CommandProcessor.getInstance().addCommand(cmd);
   }
+};
+
+
+/**
+ * User opts to override the performance
+ */
+os.MapContainer.prototype.overrideFailIfPerformanceCaveat = function() {
+  this.overrideFailIfMajorPerformanceCaveat_ = true;
+  this.setCesiumEnabled(true);
 };
 
 
@@ -1208,10 +1250,8 @@ os.MapContainer.prototype.persistCameraState = function() {
     // always translate the center point to EPSG:4326
     var center = view.getCenter() || os.map.DEFAULT_CENTER;
     if (os.map.PROJECTION != os.proj.EPSG4326) {
-      var point = new ol.geom.Point(center);
-      point.transform(os.map.PROJECTION, os.proj.EPSG4326);
-      os.geo.normalizeGeometryCoordinates(point);
-      center = point.getFirstCoordinate();
+      center = ol.proj.toLonLat(center, os.map.PROJECTION);
+      center[0] = os.geo.normalizeLongitude(center[0]);
     }
 
     var resolution = view.getResolution();
@@ -1295,14 +1335,8 @@ os.MapContainer.prototype.restoreCameraStateInternal_ = function(cameraState) {
         zoom = this.resolutionToZoom(resolution);
       }
 
-      // camera state is saved in EPSG:4326, so translate back to the current projection if different
-      var center = cameraState.center;
-      if (os.map.PROJECTION != os.proj.EPSG4326) {
-        var point = new ol.geom.Point(center);
-        point.transform(os.proj.EPSG4326, os.map.PROJECTION);
-        center = point.getFirstCoordinate();
-      }
-
+      // camera state is saved in EPSG:4326
+      var center = ol.proj.fromLonLat(cameraState.center, os.map.PROJECTION);
       view.setCenter(center);
       view.setRotation(goog.math.toRadians(cameraState.heading));
       view.setZoom(zoom);
@@ -1356,7 +1390,7 @@ os.MapContainer.prototype.setCesiumEnabled = function(useCesium, opt_silent) {
 
   // change the view if different than current
   if (useCesium != this.is3DEnabled()) {
-    if (useCesium && this.is3DSupported() && !this.olCesium_) {
+    if (useCesium && this.is3DSupported() && !this.failPerformanceCaveat() && !this.olCesium_) {
       // initialize cesium
       this.initCesium_();
     }
@@ -1375,15 +1409,15 @@ os.MapContainer.prototype.setCesiumEnabled = function(useCesium, opt_silent) {
       this.rootSynchronizer_.reset();
     }
 
-    if (this.is3DEnabled() != useCesium && !opt_silent) {
-      // if we tried enabling cesium and it isn't supported or enabling failed, disable support and display an error
-      this.is3DSupported_ = false;
-      os.ui.help.launchWebGLSupportDialog('3D Globe Not Supported');
-
-      os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.WEBGL_FAILED, 1);
-    }
-
     this.dispatchEvent(os.events.EventType.MAP_MODE);
+  }
+
+  if (this.is3DEnabled() != useCesium && !this.failPerformanceCaveat() && !opt_silent) {
+    // if we tried enabling cesium and it isn't supported or enabling failed, disable support and display an error
+    this.is3DSupported_ = false;
+    os.ui.help.launchWebGLSupportDialog('3D Globe Not Supported');
+
+    os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.WEBGL_FAILED, 1);
   }
 
   // save the current map mode to settings after the stack clears. this will prevent conflicts with Angular caused by
@@ -1433,8 +1467,8 @@ os.MapContainer.prototype.initCesium_ = function() {
 
       scene.globe.enableLighting = !!os.settings.get(os.config.DisplaySetting.ENABLE_LIGHTING, false);
 
-      // set the FOV to 45 degrees to match the desktop version
-      scene.camera.frustum.fov = Cesium.Math.PI_OVER_FOUR;
+      // set the FOV to 60 degrees to match Google Earth
+      scene.camera.frustum.fov = Cesium.Math.PI_OVER_THREE;
 
       // update the globe base color from application settings
       var bgColor = /** @type {string} */ (os.settings.get(['bgColor'], '#000000'));
@@ -1573,6 +1607,29 @@ os.MapContainer.prototype.is3DSupported = function() {
   }
 
   return this.is3DSupported_;
+};
+
+
+/**
+ * Checks if WebGL will be rendered with degraded performance
+ * @return {boolean|undefined|null}
+ */
+os.MapContainer.prototype.failPerformanceCaveat = function() {
+  if (this.overrideFailIfMajorPerformanceCaveat_) {
+    return false;
+  } else {
+    if (this.hasPerformanceCaveat_ == undefined) {
+      var failIfMajorPerformanceCaveat_ =
+        /** @type {boolean} */ (os.settings.get('webgl.performanceCaveat.failIf', false));
+      this.hasPerformanceCaveat_ = failIfMajorPerformanceCaveat_ ?
+          os.webgl.hasPerformanceCaveat() : false;
+      if (this.hasPerformanceCaveat_) {
+        os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.WEBGL_PERFORMANCE_CAVEAT, 1);
+      }
+    }
+
+    return this.hasPerformanceCaveat_;
+  }
 };
 
 
@@ -1785,33 +1842,13 @@ os.MapContainer.prototype.onRemoveLayerEvent_ = function(event) {
 
 
 /**
- * Adds a feature to the drawing layer. Features can be added by coordinate if the feature needs to be created in the
- * context of the map. This is useful when adding features from external windows.
- * @param {!(ol.Feature|ol.Coordinate)} feature The feature or coordinate to add
- * @param {Object=} opt_style Optional feature style
- * @param {ol.layer.Layer=} opt_layer Optional layer if you don't want to use the drawing one
- * @return {(ol.Feature|undefined)} The feature's id, or undefined if the feature wasn't added
- *
+ * @inheritDoc
  * @export Prevent the compiler from moving the function off the prototype.
  */
-os.MapContainer.prototype.addFeature = function(feature, opt_style, opt_layer) {
+os.MapContainer.prototype.addFeature = function(feature, opt_style) {
   if (feature != undefined) {
     os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.ADD_FEATURE, 1);
-    if (goog.isArray(feature)) {
-      if (!(feature instanceof Array)) {
-        feature = goog.array.clone(feature);
-      }
-
-      var geometry = new ol.geom.Point(/** @type {ol.Coordinate} */ (feature));
-      feature = new ol.Feature();
-
-      // if the style provides a custom geometry field, set it on the feature
-      if (opt_style && opt_style['geometry']) {
-        feature.setGeometryName(opt_style['geometry']);
-      }
-
-      feature.setGeometry(geometry);
-    } else if (!(feature instanceof ol.Feature)) {
+    if (!(feature instanceof ol.Feature)) {
       // created in another context
       feature = os.ol.feature.clone(feature);
     }
@@ -1823,7 +1860,7 @@ os.MapContainer.prototype.addFeature = function(feature, opt_style, opt_layer) {
       os.style.setFeatureStyle(feature);
     }
 
-    var drawLayer = opt_layer ? opt_layer : this.getLayer(os.MapContainer.DRAW_ID);
+    var drawLayer = this.getLayer(os.MapContainer.DRAW_ID);
     if (drawLayer) {
       // make sure the feature has an id or we won't be able to look it up for removal
       if (!feature.getId()) {
@@ -1833,10 +1870,13 @@ os.MapContainer.prototype.addFeature = function(feature, opt_style, opt_layer) {
       // set the layer id so we can look up the layer
       feature.set(os.data.RecordField.SOURCE_ID, /** @type {os.layer.ILayer} */ (drawLayer).getId());
 
-      var drawSource = /** @type {ol.source.Vector} */ (drawLayer.getSource());
-      os.interpolate.interpolateFeature(feature);
-      drawSource.addFeature(feature);
-      return feature;
+      var drawSource = drawLayer.getSource();
+
+      if (drawSource instanceof ol.source.Vector) {
+        os.interpolate.interpolateFeature(feature);
+        drawSource.addFeature(feature);
+        return feature;
+      }
     }
   }
 
@@ -1845,11 +1885,7 @@ os.MapContainer.prototype.addFeature = function(feature, opt_style, opt_layer) {
 
 
 /**
- * Adds an array of features to the drawing layer.
- * @param {!Array<!ol.Feature>} features The features to add
- * @param {Object=} opt_style Optional style to apply to all features
- * @return {!Array<!ol.Feature>}
- *
+ * @inheritDoc
  * @export Prevent the compiler from moving the function off the prototype.
  */
 os.MapContainer.prototype.addFeatures = function(features, opt_style) {
@@ -1866,16 +1902,13 @@ os.MapContainer.prototype.addFeatures = function(features, opt_style) {
 
 
 /**
- * Removes a feature from the drawing layer
- * @param {ol.Feature|number|string|undefined} feature The feature or feature id
- * @param {boolean=} opt_dispose If the feature should be disposed
- * @param {ol.layer.Layer=} opt_layer Optional layer if you don't want to use the drawing one
+ * @inheritDoc
  * @export Prevent the compiler from moving the function off the prototype.
  */
-os.MapContainer.prototype.removeFeature = function(feature, opt_dispose, opt_layer) {
+os.MapContainer.prototype.removeFeature = function(feature, opt_dispose) {
   if (goog.isDefAndNotNull(feature)) {
     os.metrics.Metrics.getInstance().updateMetric(os.metrics.keys.Map.REMOVE_FEATURE, 1);
-    var layer = opt_layer ? opt_layer : this.getLayer(os.MapContainer.DRAW_ID);
+    var layer = this.getLayer(os.MapContainer.DRAW_ID);
     var source = /** @type {ol.source.Vector} */ (layer.getSource());
     if (goog.isString(feature) || goog.isNumber(feature)) {
       feature = source.getFeatureById(feature);
@@ -1895,8 +1928,7 @@ os.MapContainer.prototype.removeFeature = function(feature, opt_dispose, opt_lay
 
 
 /**
- * @param {ol.Feature|number|string|undefined} feature
- * @return {boolean} True if the feature is on the map, false otherwise
+ * @inheritDoc
  */
 os.MapContainer.prototype.containsFeature = function(feature) {
   if (goog.isDefAndNotNull(feature)) {
@@ -1915,10 +1947,7 @@ os.MapContainer.prototype.containsFeature = function(feature) {
 
 
 /**
- * Removes an array of features from the drawing layer.
- * @param {!Array<!ol.Feature>} features The features to remove
- * @param {boolean=} opt_dispose If the feature should be disposed
- *
+ * @inheritDoc
  * @export Prevent the compiler from moving the function off the prototype.
  */
 os.MapContainer.prototype.removeFeatures = function(features, opt_dispose) {
@@ -1931,10 +1960,9 @@ os.MapContainer.prototype.removeFeatures = function(features, opt_dispose) {
 
 /**
  * Gets the array of features in the drawing layer.
- * @param {ol.layer.Layer=} opt_layer
  * @return {Array<ol.Feature>}
  */
-os.MapContainer.prototype.getFeatures = function(opt_layer) {
+os.MapContainer.prototype.getFeatures = function() {
   return this.drawingLayer_ ? this.drawingLayer_.getSource().getFeatures() : [];
 };
 
@@ -1986,11 +2014,7 @@ os.MapContainer.prototype.getLayerCount = function(clazz) {
 
 
 /**
- * Gets a layer by ID
- * @param {!(string|ol.layer.Layer|ol.Feature)} layerOrFeature
- * @param {ol.Collection=} opt_search
- * @param {boolean=} opt_remove This is for INTERNAL use only.
- * @return {?ol.layer.Layer} The layer or null if no layer was found
+ * @inheritDoc
  */
 os.MapContainer.prototype.getLayer = function(layerOrFeature, opt_search, opt_remove) {
   if (!goog.isDefAndNotNull(opt_remove)) {

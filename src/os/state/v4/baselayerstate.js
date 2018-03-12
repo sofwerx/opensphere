@@ -30,6 +30,7 @@ goog.require('os.xml');
 os.state.v4.LayerTag = {
   ANIMATE: 'animate',
   ARROW_SIZE: 'arrowSize',
+  ARROW_UNITS: 'arrowUnits',
   BFS: 'basicFeatureStyle',
   COLOR: 'color',
   CONTRAST: 'contrast',
@@ -44,9 +45,13 @@ os.state.v4.LayerTag = {
   LABEL: 'label',
   LABEL_COLOR: 'labelColor',
   LABEL_SIZE: 'labelSize',
+  LOB_COLUMN_LENGTH: 'lobColumnLength',
   LOB_LENGTH: 'lobLength',
+  LOB_LENGTH_TYPE: 'lobLengthType',
   LOB_LENGTH_ERROR: 'lobLengthError',
   LOB_LENGTH_COLUMN: 'lobLengthColumn',
+  LOB_LENGTH_UNITS: 'lobLengthUnits',
+  LOB_LENGTH_ERROR_UNITS: 'lobLengthErrorUnits',
   LOB_LENGTH_ERROR_COLUMN: 'lobLengthErrorColumn',
   LOB_BEARING_COLUMN: 'lobBearingColumn',
   LOB_BEARING_ERROR: 'lobBearingError',
@@ -67,6 +72,8 @@ os.state.v4.LayerTag = {
   SHOW_ELLIPSOIDS: 'showEllipsoids',
   SHOW_ERROR: 'showError',
   SHOW_GROUND_REF: 'showGroundRef',
+  SHOW_ROTATION: 'showRotation',
+  ROTATION_COLUMN: 'rotationColumn',
   STYLES: 'styles',
   TAGS: 'tags',
   TIME_ENABLED: 'timeEnabled',
@@ -161,6 +168,18 @@ os.state.v4.BaseLayerState.prototype.hasLocalData = function(layerOptions) {
 
 
 /**
+ * Checks if a layer was loaded from the file system.
+ * @param {Object.<string, *>} layerOptions The layer options.
+ * @return {boolean} If the layer was loaded from the file system.
+ * @protected
+ */
+os.state.v4.BaseLayerState.prototype.hasFileSystemData = function(layerOptions) {
+  return os.file.isFileSystem(/** @type {string|undefined} */ (layerOptions['url'])) ||
+      os.file.isFileSystem(/** @type {string|undefined} */ (layerOptions['url2']));
+};
+
+
+/**
  * Checks if the provided layer is valid for addition to the state file
  * @param {os.layer.ILayer} layer The layer
  * @return {boolean} If the layer should be added
@@ -180,8 +199,8 @@ os.state.v4.BaseLayerState.prototype.isValid = function(layer) {
       return false;
     }
 
-    // skip local data (these are handled separately)
-    return !this.hasLocalData(layerOptions);
+    // skip local/file system data (these are handled separately)
+    return !this.hasLocalData(layerOptions) && !this.hasFileSystemData(layerOptions);
   } catch (e) {
     // may not be a os.layer.ILayer... so don't persist it
   }
@@ -650,7 +669,7 @@ os.state.v4.BaseLayerState.prototype.defaultConfigToXML = function(key, value, l
     }
   } else {
     // classes
-    var persistObj = os.ui.state.StateManager.getInstance().getPersistable(key);
+    var persistObj = os.state.StateManager.getInstance().getPersistable(key);
     if (persistObj) {
       // only try this if the key is registered with the state manager
       try {
@@ -681,7 +700,7 @@ os.state.v4.BaseLayerState.prototype.defaultConfigToXML = function(key, value, l
  */
 os.state.v4.BaseLayerState.prototype.defaultXmlToConfig = function(key, el) {
   var result = null;
-  var persistObj = os.ui.state.StateManager.getInstance().getPersistable(key);
+  var persistObj = os.state.StateManager.getInstance().getPersistable(key);
   var value = el.textContent;
   var children = goog.dom.getChildren(el);
 

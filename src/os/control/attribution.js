@@ -1,5 +1,7 @@
 goog.provide('os.control.Attribution');
 
+goog.require('goog.dom.safe');
+goog.require('goog.html.SafeHtml');
 goog.require('ol.control.Attribution');
 
 /**
@@ -23,9 +25,7 @@ goog.inherits(os.control.Attribution, ol.control.Attribution);
 os.control.Attribution.CheckVisibleAtResolution = true;
 
 /**
- * Get a list of visible attributions.
- * @param {olx.FrameState} frameState Frame state.
- * @return {Array.<string>} Attributions.
+ * @inheritDoc
  * @suppress {accessControls}
  */
 os.control.Attribution.prototype.getSourceAttributions_ = function(frameState) {
@@ -46,7 +46,7 @@ os.control.Attribution.prototype.getSourceAttributions_ = function(frameState) {
   for (var i = 0, ii = layerStatesArray.length; i < ii; ++i) {
     var layerState = layerStatesArray[i];
     if (os.control.Attribution.CheckVisibleAtResolution) {
-      if (!ol.layer.Layer.visibleAtResolution(layerState, resolution)) {
+      if (!os.control.Attribution.visibleAtResolution(layerState, resolution)) {
         continue;
       }
     }
@@ -82,8 +82,8 @@ os.control.Attribution.prototype.getSourceAttributions_ = function(frameState) {
 };
 
 /**
+ * @inheritDoc
  * @suppress {accessControls}
- * @param {?olx.FrameState} frameState Frame state.
  */
 os.control.Attribution.prototype.updateElement_ = function(frameState) {
   if (!frameState) {
@@ -100,26 +100,23 @@ os.control.Attribution.prototype.updateElement_ = function(frameState) {
   }
 
   // remove everything
-  this.ulElement_.innerHTML = '';
+  goog.dom.removeChildren(this.ulElement_);
 
   // add the label
-  var label = document.createElement('LI');
+  var label;
   if (attributions.length > 1) {
-    label.innerHTML = 'Sources:';
+    label = goog.html.SafeHtml.create('li', undefined, 'Sources:');
   } else {
-    label.innerHTML = 'Source:';
+    label = goog.html.SafeHtml.create('li', undefined, 'Source:');
   }
-  this.ulElement_.appendChild(label);
+
+  goog.dom.appendChild(this.ulElement_, goog.dom.safeHtmlToNode(label));
 
   // append the attributions
-  for (var i = 0, ii = attributions.length - 1; i < ii; ++i) {
-    var element = document.createElement('LI');
-    element.innerHTML = attributions[i] + ',';
-    this.ulElement_.appendChild(element);
+  for (var i = 0, ii = attributions.length; i < ii; ++i) {
+    label = goog.html.SafeHtml.create('li', undefined, attributions[i]);
+    goog.dom.appendChild(this.ulElement_, goog.dom.safeHtmlToNode(label));
   }
-  var lastItem = document.createElement('LI');
-  lastItem.innerHTML = attributions[attributions.length - 1];
-  this.ulElement_.appendChild(lastItem);
 
   var visible = attributions.length > 0;
   if (this.renderedVisible_ != visible) {
@@ -134,3 +131,17 @@ os.control.Attribution.prototype.updateElement_ = function(frameState) {
  * @suppress {accessControls}
  */
 ol.control.Attribution.prototype.insertLogos_ = goog.nullFunction;
+
+
+/**
+ * Replaces `ol.layer.Layer.visibleAtResolution` because Openlayers only checks the layerState for visibility. This does
+ * not work when Cesium is up.
+ *
+ * @param {ol.LayerState} layerState Layer state.
+ * @param {number} resolution Resolution.
+ * @return {boolean} The layer is visible at the given resolution.
+ */
+os.control.Attribution.visibleAtResolution = function(layerState, resolution) {
+  return layerState.layer.getVisible() && resolution >= layerState.minResolution &&
+      resolution < layerState.maxResolution;
+};

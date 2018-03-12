@@ -170,6 +170,7 @@ os.metrics.keys.Map = {
   UNITS_NAUTICALMILE: 'map.units.nauticalmile',
   UNITS_YARD: 'map.units.yard',
   WEBGL_FAILED: 'map.stats.error-webglInitFailed',
+  WEBGL_PERFORMANCE_CAVEAT: 'map.stats.error-webglPerfCaveat',
   WEBGL_UNSUPPORTED: 'map.stats.error-webglUnsupported'
 };
 
@@ -228,14 +229,21 @@ os.metrics.Layer = {
   VECTOR_SHOW_ARROW: 'layers.features.changeVectorShowArrow',
   VECTOR_SHOW_ERROR: 'layers.features.changeVectorShowError',
   VECTOR_SHOW_ELLIPSE: 'layers.features.changeVectorShowEllipse',
+  VECTOR_SHOW_ROTATION: 'layers.features.changeVectorShowRotation',
   VECTOR_ARROW_SIZE: 'layers.features.changeVectorArrowSize',
+  VECTOR_ARROW_UNITS: 'layers.features.changeVectorArrowUnits',
+  VECTOR_LOB_COLUMN_LENGTH: 'layers.features.changeVectorLineOfBearingColumnLength',
   VECTOR_LOB_LENGTH: 'layers.features.changeVectorLineOfBearingLength',
+  VECTOR_LOB_LENGTH_TYPE: 'layers.features.changeVectorLineOfBearingLengthType',
+  VECTOR_LOB_LENGTH_UNITS: 'layers.features.changeVectorLineOfBearingLengthUnits',
   VECTOR_LOB_LENGTH_COLUMN: 'layers.features.changeVectorLineOfBearingLengthColumn',
   VECTOR_LOB_LENGTH_ERROR: 'layers.features.changeVectorLineOfBearingLengthError',
   VECTOR_LOB_LENGTH_ERROR_COLUMN: 'layers.features.changeVectorLineOfBearingLengthErrorColumn',
+  VECTOR_LOB_LENGTH_ERROR_UNITS: 'layers.features.changeVectorLineOfBearingLengthErrorUnits',
   VECTOR_LOB_BEARING_COLUMN: 'layers.features.changeVectorLineOfBearingBearingColumn',
   VECTOR_LOB_BEARING_ERROR: 'layers.features.changeVectorLineOfBearingBearingError',
   VECTOR_LOB_BEARING_ERROR_COLUMN: 'layers.features.changeVectorLineOfBearingBearingErrorColumn',
+  VECTOR_ROTATION_COLUMN: 'layers.features.changeVectorRotationColumn',
   LABEL_COLOR: 'layers.features.changeLabelColor',
   LABEL_SIZE: 'layers.features.changeLabelSize',
   LABEL_TOGGLE: 'layers.features.changeLabelToggle',
@@ -255,7 +263,6 @@ os.metrics.Layer = {
   RENAME: 'layers.contextMenu.rename',
   EXPORT: 'layers.contextMenu.export',
   CREATE_BUFFER: 'layers.contextMenu.createBuffer',
-  CONVOLVE: 'layers.contextMenu.convolve',
   SHOW_DESCRIPTION: 'layers.contextMenu.showDescription'
 };
 

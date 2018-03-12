@@ -2,6 +2,8 @@ goog.provide('os.ui.text.SimpleMDE');
 goog.provide('os.ui.text.SimpleMDECtrl');
 goog.provide('os.ui.text.simpleMDEDirective');
 
+goog.require('goog.dom.safe');
+goog.require('ol.xml');
 goog.require('os.ui.Module');
 
 
@@ -37,16 +39,20 @@ os.ui.Module.directive('simplemde', [os.ui.text.simpleMDEDirective]);
  * @param {Element} el
  */
 os.ui.text.SimpleMDE.wordCount = function(el) {
-  var scope = $(el).scope();
-  if (scope) {
-    var len = scope['text'] ? scope['text'].length : 0;
-    var value = len;
-    if (scope['maxlength']) {
-      value += ' / ' + scope['maxlength'];
+  if (el) {
+    var scope = $(el).scope();
+    var html = '';
+
+    if (scope) {
+      var len = scope['text'] ? scope['text'].length : 0;
+      var value = len;
+      if (scope['maxlength']) {
+        value += ' / ' + scope['maxlength'];
+      }
+      html = value;
     }
-    el.innerHTML = value;
-  } else {
-    el.innerHTML = '';
+
+    goog.dom.safe.setInnerHtml(el, goog.html.SafeHtml.htmlEscape(html));
   }
 };
 
@@ -196,35 +202,42 @@ os.ui.text.SimpleMDECtrl.prototype.cleanHtml = function(plainText) {
 
 
 /**
+ * @param {Object=} opt_toolbar
+ * @return {Object}
+ */
+os.ui.text.SimpleMDECtrl.prototype.getOptions = function(opt_toolbar) {
+  var toolbar = os.ui.text.SimpleMDE.TOOLBAR;
+  if (this.scope_['basictoolbar']) {
+    toolbar = os.ui.text.SimpleMDE.BASICTOOLBAR;
+  }
+
+  if (opt_toolbar) {
+    toolbar = opt_toolbar;
+  }
+
+  return {
+    'autoDownloadFontAwesome': false,
+    'autofocus': false,
+    'autosave': {
+      'enabled': false
+    },
+    'element': this.element_.find('.simplemdetextarea')[0],
+    'initialValue': this.scope_['text'],
+    'spellChecker': false,
+    'toolbar': toolbar,
+    'status': os.ui.text.SimpleMDE.STATUS,
+    'previewRender': this.cleanHtml
+  };
+};
+
+
+/**
  * Initialize simplemde
  * @param {Object=} opt_toolbar custom toolbar
  */
 os.ui.text.SimpleMDECtrl.prototype.init = function(opt_toolbar) {
   if (this.element_) {
-    var toolbar = os.ui.text.SimpleMDE.TOOLBAR;
-    if (this.scope_['basictoolbar']) {
-      toolbar = os.ui.text.SimpleMDE.BASICTOOLBAR;
-    }
-
-    if (opt_toolbar) {
-      toolbar = opt_toolbar;
-    }
-
-    var options = {
-      'autoDownloadFontAwesome': false,
-      'autofocus': false,
-      'autosave': {
-        'enabled': false
-      },
-      'element': this.element_.find('.simplemdetextarea')[0],
-      'initialValue': this.scope_['text'],
-      'spellChecker': false,
-      'toolbar': toolbar,
-      'status': os.ui.text.SimpleMDE.STATUS,
-      'previewRender': goog.bind(this.cleanHtml, this)
-    };
-
-    this.simplemde = new SimpleMDE(options);
+    this.simplemde = new SimpleMDE(this.getOptions(opt_toolbar));
     this.scope_['previewText'] = os.ui.text.SimpleMDE.removeMarkdown(this.scope_['text'], true);
 
     // Watch to see if something changes the text and update the value
@@ -281,11 +294,7 @@ os.ui.text.SimpleMDE.removeMarkdown = function(rawText, opt_keepLineBreaks) {
     var cleanText = rawText;
     var node = os.ui.text.SimpleMDE.getHtmlNode(rawText);
     if (node) {
-      if (opt_keepLineBreaks) {
-        cleanText = goog.dom.getRawTextContent(node);
-      } else {
-        cleanText = goog.dom.getTextContent(node);
-      }
+      cleanText = ol.xml.getAllTextContent(node, !opt_keepLineBreaks);
     }
     return os.ui.sanitize(cleanText);
   } else {
